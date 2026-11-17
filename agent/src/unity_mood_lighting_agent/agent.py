@@ -28,14 +28,13 @@ agent = Agent(
 )
 
 
-def build_agent_input(task: str) -> str:
-    """Injects current scene state as context, ahead of the agent running —
-    this is the code-orchestrated 'find' step, not a tool the agent calls."""
+def get_scene_context() -> str:
+    """Fetches the current scene state — independent of any task, this is
+    the code-orchestrated 'find' step (not a tool the agent calls)."""
     scene = list_scene_transforms()
-    scene_lines = "\n".join(
+    return "\n".join(
         f"- {o.name} (instance_id={o.instance_id}): "
         f"pos=({o.pos_x}, {o.pos_y}, {o.pos_z}), "
         f"rot=({o.rot_x}, {o.rot_y}, {o.rot_z})"
         for o in scene
     )
-    return f"Current scene objects:\n{scene_lines}\n\nTask: {task}"

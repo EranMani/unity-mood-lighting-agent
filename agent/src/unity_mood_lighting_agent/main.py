@@ -13,14 +13,17 @@ import sys
 from agents import Runner
 from dotenv import load_dotenv
 
-from unity_mood_lighting_agent.agent import agent, build_agent_input
+from unity_mood_lighting_agent.agent import agent, get_scene_context
 
 load_dotenv()
 
 
 async def run(task: str) -> str:
-    agent_input = build_agent_input(task)
-    result = await Runner.run(agent, agent_input)
+    messages = [
+        {"role": "user", "content": f"Current scene objects:\n{get_scene_context()}"},
+        {"role": "user", "content": task},
+    ]
+    result = await Runner.run(agent, messages)
     return result.final_output
 
 
