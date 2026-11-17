@@ -11,15 +11,17 @@ move the scene toward that mood.
 
 ## Status: v0 in progress — build log below (see Scope for the target)
 
-**Resume here (next session):** v0's pipeline works end to end (task → real
-Unity scene change, verified live), and a rotation guardrail (step 14) now
-catches the step-13 bug class automatically — rejects rotations that point
-a light at nothing, verified live through the real agent. Next: the
-`aim_light_at(target_object)` feature (for tasks that name a target — not
-yet built, noted in step 14) and v1's judge/visual-feedback loop (the
-guardrail only catches "physically nonsensical," not "doesn't match the
-mood" — still zero automated way to score mood-match). Start with whichever
-of the two matters more next; judge/visual-feedback is the bigger milestone.
+**Resume here (next session):** v0's pipeline works end to end, the
+rotation guardrail (step 14) catches physically-nonsensical rotations/
+moves, and v1 (judge, step 16) + v2 (retry loop, step 17) are both built
+and verified live. The real blocker now is the lighting agent's tool list:
+it still only has `set_object_transform` (position/rotation) — no
+intensity, color, or light-creation — so most moods are structurally
+unreachable regardless of how good the judge/loop are. **Next: expand the
+agent's tools** (new Light creation, intensity/color on existing lights)
+per the v0 tool list below, then re-run the judge loop and see real scores
+improve. The `aim_light_at(target_object)` feature (for tasks that name a
+target) is still unbuilt, lower priority than the tool expansion.
 
 This project is being built deliberately bottom-up, incrementally, one small
 proven step at a time (see `agent/src/unity_mood_lighting_agent/learning_steps/`
@@ -51,6 +53,10 @@ the problem, add complexity only once that's proven, not before.
     - Wired into `tools.py`'s `set_object_transform`: only runs when the call actually touches rotation (pure position moves skip it); on no-hit, returns a rejection string explaining why instead of touching Unity at all; on hit, proceeds exactly as before.
     - **Verified live, through the real agent, not just unit-tested.** Re-ran the exact step 13 task ("rotate the Directional Light, set rot_x to 270") through `main.py`'s real pipeline: agent tried `rot_x=270` → rejected (no hit) → retried `rot_x=270` again → rejected again → self-corrected to `rot_x=90` → accepted, applied. No human had to look at the Editor to catch the bad value this time — the agent read the rejection message and fixed its own reasoning.
     - Minor trap hit while testing: `load_dotenv()` is only called in `main.py`, not `agent.py` — bypassing `main.py` to call `Runner.run` directly fails with a missing `OPENAI_API_KEY` error that looks like a credentials problem but is actually a "forgot to load .env in this entry point" problem.
+    - **Edge case caught by Eran, same day:** the guardrail as first built only ran when rotation changed — but moving an object's *position*, with rotation left untouched, can just as easily point its existing rotation into empty space from the new spot. Fixed by gating on `any_position or any_rotation` (not rotation alone), always checking the resulting candidate position+rotation together regardless of which one actually changed. Verified live: moving the Directional Light far from the Cube (rotation unchanged) now correctly rejects; a normal nearby move still passes.
+15. **`capture_game_view()` — the screenshot half of v1's judge.** Tested live first (per project discipline): Unity CLI has `capture game_view` (actual rendered scene, URP included), `capture scene_view` (editor camera + gizmos — wrong one), and `capture editor_window` (any editor panel — also wrong). `game_view` is correct for judging mood since it's what a player would actually see. Returns PNG + dimensions; `unity_bridge.py` wrapper defaults to a fresh temp file via `tempfile.mkstemp` if no path given. Deterministic wrapper, same as every other bridge function — scoring the image is the judge agent's job, not this one's.
+16. **`judge.py` — a SECOND, separate agent, the v1 judge.** Structured output (`MoodJudgement`: `mood_match_score` 0-10, `dominant_color_temp`, `contrast_level`, `notes`) exactly as the README's v1 plan speced, built as `output_type` on its own `Agent` instance — not a tool on the lighting agent, a fully separate evaluator. `judge_mood_match(task)` captures the current live view, base64-encodes it into a `data:image/png;base64,...` URL (the Agents SDK takes images via `input_image`/`image_url` content blocks, confirmed by reading `ResponseInputImageContentParam` directly rather than guessing), and returns `(passed, judgement)` — **code** decides pass/fail from `mood_match_score >= PASS_THRESHOLD` (6), the judge agent only produces the score, same code-decides/LLM-judges split as the rotation guardrail. Verified live against two different scene states (default scene scored 1/10 against "horror"; a rotated-light scene scored 2/10 against "sunset" with specific, differentiated reasoning each time) — confirms it's reading real pixels, not returning a static response.
+17. **The v2 retry loop — `main.py`.** Decided live with Eran: run lighting agent → judge the result → pass, stop; fail, feed the judge's own `notes` back into the next prompt (so the agent knows *why* it failed, not just that it did) → retry, capped at `MAX_ATTEMPTS = 3` (unbounded retry risks cost/infinite-loop if the mood is structurally unreachable with current tools) → give up and report the last judgement if still failing after 3. Each retry re-reads the *current* live scene via `get_scene_context()`, not the original state, so attempt 2 builds on whatever attempt 1 actually left behind. Caught and fixed a real bug during testing: `judgement` referenced after the loop was flagged "possibly unbound" by the type checker (true in principle if `MAX_ATTEMPTS` were 0) — fixed by moving the give-up return inside the loop's last iteration instead of after it. **Verified live, full 3-attempt runs, twice** ("horror mood" and "golden hour sunset"): both ran 3 real attempts, fed real judge feedback back each time, scores varied per attempt (not static), and both correctly gave up and reported the real reason. The low scores are a genuine, expected limitation, not a bug — the lighting agent still has only ONE tool (`set_object_transform`: position/rotation), no intensity/color/light-creation, so most moods are structurally out of reach until the tool list grows (see v0 tool list / Open gap below).
 
 ### Unity rotation terminology (for anyone, including future us, re-reading this)
 

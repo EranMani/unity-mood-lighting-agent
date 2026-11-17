@@ -11,7 +11,9 @@ name or ID has no ambiguity. See learning_steps/step5 for why that split
 """
 
 import json
+import os
 import subprocess
+import tempfile
 
 from pydantic import BaseModel, Field
 
@@ -159,3 +161,40 @@ def set_object_transform(
         args += ["--rotation", f"[{rotation[0]},{rotation[1]},{rotation[2]}]"]
 
     subprocess.run(args, capture_output=True, text=True, check=True)
+
+
+class CaptureResult(BaseModel):
+    """Result of a game_view capture — what the judge agent will look at."""
+
+    path: str = Field(description="Absolute path to the saved PNG.")
+    width: int
+    height: int
+
+
+def capture_game_view(output_path: str | None = None) -> CaptureResult:
+    """Capture the Game view (actual rendered scene, not editor gizmos/grid)
+    as a PNG. This is what a judge agent should see, not `scene_view` or
+    `editor_window`. Defaults to a fresh temp file if output_path isn't
+    given. Deterministic wrapper around the Unity CLI call — scoring the
+    image is the agent's job, not this function's."""
+    if output_path is None:
+        fd, output_path = tempfile.mkstemp(suffix=".png", prefix="mood_capture_")
+        os.close(fd)
+
+    result = subprocess.run(
+        [
+            UNITY_EXE,
+            "command",
+            "capture game_view",
+            "--output-path",
+            output_path,
+            "--project-path",
+            PROJECT_PATH,
+            "--result-only",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    raw = json.loads(result.stdout)
+    return CaptureResult(path=raw["savedPath"], width=raw["width"], height=raw["height"])
