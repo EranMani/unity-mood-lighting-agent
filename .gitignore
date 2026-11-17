@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 .env
+agent/.venv/
 
 # Unity (applies once a Unity project folder is added under this repo)
 [Ll]ibrary/
