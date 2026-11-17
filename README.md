@@ -12,13 +12,14 @@ move the scene toward that mood.
 ## Status: v0 in progress — build log below (see Scope for the target)
 
 This project is being built deliberately bottom-up, incrementally, one small
-proven step at a time (see `agent/src/unity_mood_lighting_agent/step*.py` —
-each file is one learning step, kept even after superseded, so the build
-history stays visible). The full vision (bottom of this doc) involves
-multiple roles and an automated iterate-until-good-enough loop. **We are not
-building that yet.** Ground rule carried over from the FDE roadmap work:
-start with one agent solving the smallest real version of the problem, add
-complexity only once that's proven, not before.
+proven step at a time (see `agent/src/unity_mood_lighting_agent/learning_steps/`
+— each file is one learning step, kept even after superseded, so the build
+history stays visible; `unity_bridge.py` holds the current, consolidated,
+actually-imported version of what those steps built). The full vision (bottom of
+this doc) involves multiple roles and an automated iterate-until-good-enough
+loop. **We are not building that yet.** Ground rule carried over from the
+FDE roadmap work: start with one agent solving the smallest real version of
+the problem, add complexity only once that's proven, not before.
 
 ### Build log
 
@@ -27,6 +28,10 @@ complexity only once that's proven, not before.
 3. `step3_structured_output.py` — `output_type` + Pydantic `BaseModel`, `SceneReport` (names + count). First typed `final_output`.
 4. `step4_object_transforms_tool.py` — upgraded the tool to return real per-object data (`ObjectTransform`: name + position + rotation), still hardcoded. Caught a second real bug: calling a `@function_tool`-decorated function directly (for verification) fails — it's no longer a plain callable once decorated. Fixed by keeping the real logic in a separate `_build_transforms()` function that both the tool and the direct-call demo use.
 5. `step5_deterministic_report.py` — **architectural correction.** Step 4 had the LLM narrow rich tool data down to just names+count via its own semantic judgment — works fine at 3 objects, a real reliability risk at scale (hundreds of objects in a real scene). Realized that "list what's in the scene" has zero ambiguity and needs zero reasoning, so it doesn't need an agent at all — see **Code vs. agent, the actual rule** below.
+6. `step6_real_unity_connection.py` — real Unity connection, read side. `subprocess` → Unity CLI `script eval` → live Editor → real transform data (not MCP — we have a shell, so we call the CLI directly). Caught 2 real bugs: `GetInstanceID()` is obsolete in this Unity version (hard compile error, not warning — fixed with `GetEntityId().ToString()`), and real scene data differed from our fake data (off-center Cube, rotated light, an unaccounted-for `Global Volume`).
+7. `step7_set_transform_tool.py` — write side, `set_object_transform()`. Tested live: raw CLI first (moved the Cube, confirmed visually in the Editor), then the Python wrapper.
+8. **Reorganization.** `unity_bridge.py` created — consolidates step6+step7's current logic (`list_scene_transforms()`, `set_object_transform()`, `ObjectTransform`) into one importable module; step files moved to `learning_steps/` and kept unchanged as the historical record. Decided: flat files, not folders-per-concern — current code volume (1 schema, 2 functions) doesn't justify a `schemas/`/`tools/`/`agent/` folder split; revisit if any single concern grows past ~4-5 files.
+9. **Agent tool-design decision.** The agent gets exactly ONE tool: `set_object_transform`. Finding/listing objects stays code-orchestrated (same Code vs. agent rule as step 5) — the orchestrator calls `list_scene_transforms()` *before* invoking the agent and injects the result as context, rather than giving the agent a `find_object` tool to call itself. Scene inspection has no ambiguity; only "what to set, for the mood" does.
 
 ### Code vs. agent, the actual rule (locked in at step 5)
 
