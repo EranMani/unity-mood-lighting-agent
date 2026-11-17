@@ -9,13 +9,44 @@ Example behavior: agent inspects scene geometry + existing lights, then
 creates/adjusts Light objects (type, position, color, intensity, range) to
 move the scene toward that mood.
 
-## Status: v0 — one agent, no loop, no judge (see Scope below)
+## Status: v0 in progress — build log below (see Scope for the target)
 
-This project is being built deliberately bottom-up. The full vision (bottom of
-this doc) involves multiple roles and an automated iterate-until-good-enough
-loop. **We are not building that yet.** Ground rule carried over from the
-FDE roadmap work: start with one agent solving the smallest real version of
-the problem, add complexity only once that's proven, not before.
+This project is being built deliberately bottom-up, incrementally, one small
+proven step at a time (see `agent/src/unity_mood_lighting_agent/step*.py` —
+each file is one learning step, kept even after superseded, so the build
+history stays visible). The full vision (bottom of this doc) involves
+multiple roles and an automated iterate-until-good-enough loop. **We are not
+building that yet.** Ground rule carried over from the FDE roadmap work:
+start with one agent solving the smallest real version of the problem, add
+complexity only once that's proven, not before.
+
+### Build log
+
+1. `step1_hello_agent.py` — minimal `Agent` + `Runner.run`, no tools. Proved the harness works.
+2. (tool added to step1) — first `@function_tool`, hardcoded fake scene (`list_scene_objects`). Caught a real bug: the agent's `instructions` never mentioned the tool existed, so it wasn't being called — fixed by describing the capability in the prompt, not by forcing `tool_choice`.
+3. `step3_structured_output.py` — `output_type` + Pydantic `BaseModel`, `SceneReport` (names + count). First typed `final_output`.
+4. `step4_object_transforms_tool.py` — upgraded the tool to return real per-object data (`ObjectTransform`: name + position + rotation), still hardcoded. Caught a second real bug: calling a `@function_tool`-decorated function directly (for verification) fails — it's no longer a plain callable once decorated. Fixed by keeping the real logic in a separate `_build_transforms()` function that both the tool and the direct-call demo use.
+5. `step5_deterministic_report.py` — **architectural correction.** Step 4 had the LLM narrow rich tool data down to just names+count via its own semantic judgment — works fine at 3 objects, a real reliability risk at scale (hundreds of objects in a real scene). Realized that "list what's in the scene" has zero ambiguity and needs zero reasoning, so it doesn't need an agent at all — see **Code vs. agent, the actual rule** below.
+
+### Code vs. agent, the actual rule (locked in at step 5)
+
+**Deterministic data tasks → plain code, no agent.** Listing/reporting scene
+contents is pure data transformation: call the tool's underlying function,
+map the result into a report shape, done — 100% correct every time,
+regardless of whether the scene has 3 objects or 3,000. No `Runner.run`,
+no `output_type`, no LLM involved.
+
+**Judgment-under-ambiguity tasks → the agent.** Deciding what lighting
+changes actually achieve "a horror feel" has no single correct answer and
+genuinely needs reasoning — that's where the agent earns its keep. This is
+Week 2 Day 2's orchestration-by-code-vs-by-LLM lesson applied concretely:
+use code where the task is deterministic, reserve the LLM for where
+autonomy/reasoning is the actual value-add, not a convenience.
+
+Practical effect on the architecture below: scene/light **inspection**
+(`list_scene_objects`, `list_lights`) will likely be called directly in
+code, not routed through agent reasoning — only the **mood → light-change
+decision** step needs the agent in the loop.
 
 ---
 
@@ -135,8 +166,8 @@ instead of implicit.
   fit the v0 tool list.
 - **Test scene**: starting from an empty Unity project. Needs a small test
   scene (a simple room with basic geometry) before v0 can be exercised at all.
-- **Agent harness**: not yet decided — OpenAI Agents SDK (already familiar
-  from the FDE roadmap course) is the likely default, but not committed.
+- **Agent harness**: **OpenAI Agents SDK** — decided. Chosen deliberately to
+  double as hands-on reinforcement of the FDE roadmap course material (Week 2).
 
 ## Repo layout
 
