@@ -63,22 +63,26 @@ def set_object_transform(
             _merge_axis(current.rot_z, rot_z),
         )
 
-    # Guardrail (locked in after build log #13's noon-sunlight bug): a
-    # rotation that points the light at nothing — not even the room's own
-    # geometry — is almost certainly a reasoning error (wrong axis/sign/
-    # convention), not an intentional choice. Checked on the CANDIDATE
-    # values, before anything is applied to the live object.
-    if any_rotation:
-        assert rotation is not None  # set above, any_rotation guarantees this
+    # Guardrail (locked in after build log #13's noon-sunlight bug): if the
+    # object's resulting direction points at nothing — not even the room's
+    # own geometry — that's almost certainly a reasoning error, not an
+    # intentional choice. Runs on ANY move that changes position and/or
+    # rotation (not just rotation alone): moving a light to a new spot can
+    # just as easily point its existing, unchanged rotation into empty
+    # space from the new position. Checked on the CANDIDATE values, before
+    # anything is applied to the live object.
+    if any_position or any_rotation:
         position_for_check = position if position is not None else (current.pos_x, current.pos_y, current.pos_z)
-        check = check_rotation_aims_at_geometry(position_for_check, rotation, self_id=target)
+        rotation_for_check = rotation if rotation is not None else (current.rot_x, current.rot_y, current.rot_z)
+        check = check_rotation_aims_at_geometry(position_for_check, rotation_for_check, self_id=target)
         if not check.hit:
             return (
-                f"Rejected: rotation {rotation} for {target} points at nothing in the scene "
-                "(no geometry within range). This usually means the rotation convention/sign is "
-                "wrong, not that this is genuinely the intended direction. Re-check the axis "
-                "values — remember Unity's +X rotation tilts the forward vector based on a "
-                "specific convention, don't assume it matches intuition."
+                f"Rejected: {target} at position={position_for_check} with rotation={rotation_for_check} "
+                "would point at nothing in the scene (no geometry within range). If you just changed "
+                "rotation, this usually means the rotation convention/sign is wrong — Unity's +X "
+                "rotation tilts the forward vector based on a specific convention, don't assume it "
+                "matches intuition. If you just changed position, the object's existing rotation may "
+                "no longer point toward any geometry from the new spot."
             )
 
     _set_object_transform(target=target, position=position, rotation=rotation)
