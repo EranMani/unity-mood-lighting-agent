@@ -19,11 +19,8 @@ load_dotenv()
 
 
 async def run(task: str) -> str:
-    messages = [
-        {"role": "user", "content": f"Current scene objects:\n{get_scene_context()}"},
-        {"role": "user", "content": task},
-    ]
-    result = await Runner.run(agent, messages)
+    prompt = f"Current scene objects:\n{get_scene_context()}\n\nTask: {task}"
+    result = await Runner.run(agent, prompt)
     return result.final_output
 
 
