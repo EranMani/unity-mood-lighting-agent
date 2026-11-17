@@ -20,15 +20,22 @@ from pydantic import BaseModel, Field
 UNITY_EXE = r"C:\Users\eranm\AppData\Local\Unity\bin\unity.exe"
 PROJECT_PATH = r"D:\AI\MyProjects\unity-mood-lighting-agent\MoodLightingScene"
 
-# Reads every root-level Transform's name/position/rotation. Root-level only
-# (t.parent != null skipped) to match step 4/5's scope: top-level scene
-# objects, not nested children.
+# Reads every root-level Transform's instanceId/name/position/rotation.
+# Root-level only (t.parent != null skipped) to match step 4/5's scope:
+# top-level scene objects, not nested children. instanceId is included so
+# the result can be used directly as --target for gameobject set_transform.
+#
+# Note: GetInstanceID() is obsolete in this Unity version (hard compile
+# error, not just a warning) — must use GetEntityId().ToString() instead.
+# The raw EntityId struct serializes to {} (no public fields), so .ToString()
+# is required to get a usable value. Also: FindObjectsByType<T>(SortMode) is
+# deprecated — use the no-args overload.
 _SCRIPT = """
 var list = new System.Collections.Generic.List<object>();
-foreach (var t in UnityEngine.Object.FindObjectsByType<UnityEngine.Transform>(UnityEngine.FindObjectsSortMode.None)) {
+foreach (var t in UnityEngine.Object.FindObjectsByType<UnityEngine.Transform>()) {
   if (t.parent != null) continue;
   var p = t.position; var r = t.eulerAngles;
-  list.Add(new { name = t.gameObject.name, pos_x = p.x, pos_y = p.y, pos_z = p.z, rot_x = r.x, rot_y = r.y, rot_z = r.z });
+  list.Add(new { instance_id = t.gameObject.GetEntityId().ToString(), name = t.gameObject.name, pos_x = p.x, pos_y = p.y, pos_z = p.z, rot_x = r.x, rot_y = r.y, rot_z = r.z });
 }
 return list;
 """.strip()
@@ -37,6 +44,7 @@ return list;
 class ObjectTransform(BaseModel):
     """One scene object's identity + where it is, flat fields only."""
 
+    instance_id: str = Field(description="GameObject entity ID — pass as --target to gameobject set_transform.")
     name: str
     pos_x: float
     pos_y: float
