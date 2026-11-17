@@ -17,7 +17,7 @@ agent = Agent(
         "a requested mood (e.g. horror, cozy, cheerful). For now, just say hello "
         "and confirm you're ready to help with Unity scene lighting."
     ),
-    model="gpt-5.1-mini",
+    model="gpt-5.4-mini",
 )
 
 
