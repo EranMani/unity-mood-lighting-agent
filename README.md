@@ -121,10 +121,18 @@ instead of implicit.
 
 ## Open questions / not yet decided
 
-- **MCP integration**: targeting the official Unity MCP Server (beta, May
-  2026) as the default assumption. Not yet installed/verified against this
-  repo — may switch to a community package (e.g. coplaydev's "MCP for Unity")
-  if the official one doesn't fit. Nothing is built against a specific one yet.
+- **MCP integration — updated 2026 (Unity CLI).** Unity deprecated the
+  in-editor AI Assistant's MCP server and replaced it with the **Unity CLI**
+  (`unity` standalone binary — installs editors/modules, manages projects
+  from a terminal, and exposes its own MCP server for AI-driven Editor
+  control). This is now the target, not the old in-editor MCP server
+  referenced in earlier drafts of this doc. Install via
+  `curl -fsSL https://unity.com/install.sh | bash` (Unity Hub also installs
+  it automatically on recent versions). Not yet installed/wired up against
+  this repo — v0's tool list (below) will be implemented against whatever
+  `unity mcp configure` exposes once we get there. Community packages (e.g.
+  coplaydev's "MCP for Unity") remain a fallback if the official path doesn't
+  fit the v0 tool list.
 - **Test scene**: starting from an empty Unity project. Needs a small test
   scene (a simple room with basic geometry) before v0 can be exercised at all.
 - **Agent harness**: not yet decided — OpenAI Agents SDK (already familiar
