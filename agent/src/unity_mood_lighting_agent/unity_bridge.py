@@ -67,6 +67,75 @@ def list_scene_transforms() -> list[ObjectTransform]:
     return [ObjectTransform(**entry) for entry in raw]
 
 
+# Guardrail: checks a CANDIDATE rotation without ever applying it to the
+# live object (no flicker, no revert-on-fail round trip). Takes the
+# candidate position/rotation as plain numbers, lets Unity's own
+# Quaternion.Euler (ZXY order, Unity's real convention) compute the forward
+# vector — we deliberately do NOT reimplement that trig in Python, since
+# getting the rotation convention wrong by hand is exactly the bug class
+# this guardrail exists to catch (see build log #13). The ray ignores the
+# light's own collider (if any) so it doesn't just hit itself at distance 0.
+_RAYCAST_CANDIDATE_SCRIPT = """
+var origin = new UnityEngine.Vector3(__POS_X__f, __POS_Y__f, __POS_Z__f);
+var rot = UnityEngine.Quaternion.Euler(__ROT_X__f, __ROT_Y__f, __ROT_Z__f);
+var direction = rot * UnityEngine.Vector3.forward;
+var hits = UnityEngine.Physics.RaycastAll(origin, direction, __MAX_DIST__f);
+foreach (var h in hits) {
+  if (h.collider.gameObject.GetEntityId().ToString() == "__SELF_ID__") continue;
+  return new { hit = true, hit_name = h.collider.gameObject.name, distance = h.distance };
+}
+return new { hit = false, hit_name = (string)null, distance = (float)0 };
+""".strip()
+
+
+class RaycastResult(BaseModel):
+    """Result of firing a ray from a candidate position/rotation."""
+
+    hit: bool = Field(description="True if the ray hit any collider other than self.")
+    hit_name: str | None = Field(default=None, description="Name of the object hit, if any.")
+    distance: float = Field(default=0.0, description="Distance to the hit, if any.")
+
+
+def check_rotation_aims_at_geometry(
+    position: tuple[float, float, float],
+    rotation: tuple[float, float, float],
+    self_id: str,
+    max_distance: float = 100.0,
+) -> RaycastResult:
+    """Guardrail check for a CANDIDATE position+rotation, before it's ever
+    applied to the live object. Computes the forward vector via Unity's own
+    Quaternion.Euler (not reimplemented in Python) and raycasts from there,
+    ignoring self_id so the light doesn't hit its own collider. Deterministic,
+    no LLM involved, same script-eval pattern as list_scene_transforms()."""
+    script = (
+        _RAYCAST_CANDIDATE_SCRIPT.replace("__POS_X__", str(position[0]))
+        .replace("__POS_Y__", str(position[1]))
+        .replace("__POS_Z__", str(position[2]))
+        .replace("__ROT_X__", str(rotation[0]))
+        .replace("__ROT_Y__", str(rotation[1]))
+        .replace("__ROT_Z__", str(rotation[2]))
+        .replace("__SELF_ID__", self_id)
+        .replace("__MAX_DIST__", str(max_distance))
+    )
+    result = subprocess.run(
+        [
+            UNITY_EXE,
+            "command",
+            "script",
+            "eval",
+            script,
+            "--result-only",
+            "--project-path",
+            PROJECT_PATH,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    raw = json.loads(result.stdout)
+    return RaycastResult(**raw)
+
+
 def set_object_transform(
     target: str,
     position: tuple[float, float, float] | None = None,

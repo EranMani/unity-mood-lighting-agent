@@ -16,7 +16,7 @@ acceptable at this scene size.
 
 from agents import function_tool
 
-from unity_mood_lighting_agent.unity_bridge import list_scene_transforms
+from unity_mood_lighting_agent.unity_bridge import check_rotation_aims_at_geometry, list_scene_transforms
 from unity_mood_lighting_agent.unity_bridge import set_object_transform as _set_object_transform
 
 
@@ -62,6 +62,24 @@ def set_object_transform(
             _merge_axis(current.rot_y, rot_y),
             _merge_axis(current.rot_z, rot_z),
         )
+
+    # Guardrail (locked in after build log #13's noon-sunlight bug): a
+    # rotation that points the light at nothing — not even the room's own
+    # geometry — is almost certainly a reasoning error (wrong axis/sign/
+    # convention), not an intentional choice. Checked on the CANDIDATE
+    # values, before anything is applied to the live object.
+    if any_rotation:
+        assert rotation is not None  # set above, any_rotation guarantees this
+        position_for_check = position if position is not None else (current.pos_x, current.pos_y, current.pos_z)
+        check = check_rotation_aims_at_geometry(position_for_check, rotation, self_id=target)
+        if not check.hit:
+            return (
+                f"Rejected: rotation {rotation} for {target} points at nothing in the scene "
+                "(no geometry within range). This usually means the rotation convention/sign is "
+                "wrong, not that this is genuinely the intended direction. Re-check the axis "
+                "values — remember Unity's +X rotation tilts the forward vector based on a "
+                "specific convention, don't assume it matches intuition."
+            )
 
     _set_object_transform(target=target, position=position, rotation=rotation)
     return f"Moved/rotated {target}: position={position}, rotation={rotation}"

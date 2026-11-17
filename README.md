@@ -12,10 +12,14 @@ move the scene toward that mood.
 ## Status: v0 in progress — build log below (see Scope for the target)
 
 **Resume here (next session):** v0's pipeline works end to end (task → real
-Unity scene change, verified live). Next milestone: v1's judge/visual-
-feedback loop — the agent currently has no way to see its own result (see
-"Open gap found by real testing" below for the concrete bug that proved
-this matters). Start there.
+Unity scene change, verified live), and a rotation guardrail (step 14) now
+catches the step-13 bug class automatically — rejects rotations that point
+a light at nothing, verified live through the real agent. Next: the
+`aim_light_at(target_object)` feature (for tasks that name a target — not
+yet built, noted in step 14) and v1's judge/visual-feedback loop (the
+guardrail only catches "physically nonsensical," not "doesn't match the
+mood" — still zero automated way to score mood-match). Start with whichever
+of the two matters more next; judge/visual-feedback is the bigger milestone.
 
 This project is being built deliberately bottom-up, incrementally, one small
 proven step at a time (see `agent/src/unity_mood_lighting_agent/learning_steps/`
@@ -42,6 +46,21 @@ the problem, add complexity only once that's proven, not before.
 11. `agent.py` + `main.py` — the full pipeline, end to end. `uv run python main.py "task"` → `get_scene_context()` (code-orchestrated) → one prompt string → `Runner.run` → agent calls `set_object_transform` → real scene change. Verified live both in code and visually in the Editor.
 12. **Two design-smell fixes, both caught by Eran, not by me.** First: `build_agent_input(task)` conflated scene-fetching (task-independent) with the task string behind one opaque combined output — split into `get_scene_context()` (no task param) + task passed separately. Second, a self-correction on my own first fix: I'd changed the call into a fake 2-message `[{"role":"user",...}, {"role":"user",...}]` list, but that format exists for real multi-turn conversation history (alternating user/assistant), not for artificially splitting one input in two — reverted to a single plain prompt string.
 13. **Real agent judgment test — found a real bug.** Asked the agent to rotate the Directional Light to simulate noon sunlight (ambiguous task, no literal coordinates given). Agent set `rot_x = 270°` — Unity's convention for straight-up-from-below, the *opposite* of overhead. Tool execution was correct; the agent's reasoning about the rotation convention was wrong. Result: scene went black. **Caught only by Eran looking at the Editor — we have no automated way to catch this ourselves.** This is exactly the gap v1's judge step exists to close (see Open gap below). Fixed by telling the agent the correct value (`rot_x = 90°`) directly.
+14. **Rotation guardrail — raycast-based, closes the step 13 bug class.** Decided this is two separable things, not one: a **guardrail** (reject bad rotations before they reach Unity — general-purpose, works even with no target object) and a **feature** for later (`aim_light_at(target_object)`, only usable when the task actually names a target — out of scope here, noted for v1+). Built the guardrail:
+    - `check_rotation_aims_at_geometry(position, rotation, self_id)` (`unity_bridge.py`) takes a **candidate** position/rotation — never applies it to the live object first (no Editor flicker, no apply-then-revert round trip). Lets Unity's own `Quaternion.Euler` compute the resulting forward vector (see "Unity rotation terminology" below for why this matters) rather than reimplementing that trig in Python, since getting the rotation convention wrong by hand is exactly the bug class being guarded against. Raycasts from the candidate position along that direction (`Physics.RaycastAll`, skipping the light's own collider) and reports `hit: bool`, `hit_name`, `distance`.
+    - Wired into `tools.py`'s `set_object_transform`: only runs when the call actually touches rotation (pure position moves skip it); on no-hit, returns a rejection string explaining why instead of touching Unity at all; on hit, proceeds exactly as before.
+    - **Verified live, through the real agent, not just unit-tested.** Re-ran the exact step 13 task ("rotate the Directional Light, set rot_x to 270") through `main.py`'s real pipeline: agent tried `rot_x=270` → rejected (no hit) → retried `rot_x=270` again → rejected again → self-corrected to `rot_x=90` → accepted, applied. No human had to look at the Editor to catch the bad value this time — the agent read the rejection message and fixed its own reasoning.
+    - Minor trap hit while testing: `load_dotenv()` is only called in `main.py`, not `agent.py` — bypassing `main.py` to call `Runner.run` directly fails with a missing `OPENAI_API_KEY` error that looks like a credentials problem but is actually a "forgot to load .env in this entry point" problem.
+
+### Unity rotation terminology (for anyone, including future us, re-reading this)
+
+Needed to understand `check_rotation_aims_at_geometry`'s script, in order:
+
+- **Vector3** — just an (x, y, z) triple. Used for positions, but a direction is also just a vector pointing that way.
+- **`Vector3.forward`** — the constant `(0, 0, 1)`. An object with zero rotation faces +Z by Unity convention; it's the object's local "front" before any rotation is applied.
+- **Euler angles** — rotation as three separate numbers (`rot_x/rot_y/rot_z`): "rotate this many degrees around each axis." Intuitive, but has two real problems: gimbal lock, and **order matters** — X-then-Y-then-Z gives a different final orientation than Z-then-X-then-Y. Unity's fixed order is **Z, then X, then Y**. Not knowing this specific order is exactly what produced the step 13 bug — "+X tilts it this way" doesn't match intuition unless you know Unity's convention going in.
+- **Quaternion** — a different representation of the same rotation (4 numbers, not individually meaningful to a human) that avoids gimbal lock and gets composition/ordering right. Nobody hand-writes one; you convert euler → quaternion and let the engine's own math handle it.
+- **How the guardrail script uses both**: `Quaternion.Euler(rot_x, rot_y, rot_z)` converts the 3 human numbers into a rotation using Unity's real ZXY order — letting Unity do this instead of reimplementing the ordering in Python means we can never get the convention backwards. `rotation * Vector3.forward` then answers "where does the default forward direction end up after this rotation" — the actual world-space direction the light now points. That direction is what gets raycast.
 
 ### Code vs. agent, the actual rule (locked in at step 5)
 
