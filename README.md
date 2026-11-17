@@ -11,6 +11,12 @@ move the scene toward that mood.
 
 ## Status: v0 in progress — build log below (see Scope for the target)
 
+**Resume here (next session):** v0's pipeline works end to end (task → real
+Unity scene change, verified live). Next milestone: v1's judge/visual-
+feedback loop — the agent currently has no way to see its own result (see
+"Open gap found by real testing" below for the concrete bug that proved
+this matters). Start there.
+
 This project is being built deliberately bottom-up, incrementally, one small
 proven step at a time (see `agent/src/unity_mood_lighting_agent/learning_steps/`
 — each file is one learning step, kept even after superseded, so the build
