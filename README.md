@@ -32,6 +32,10 @@ the problem, add complexity only once that's proven, not before.
 7. `step7_set_transform_tool.py` — write side, `set_object_transform()`. Tested live: raw CLI first (moved the Cube, confirmed visually in the Editor), then the Python wrapper.
 8. **Reorganization.** `unity_bridge.py` created — consolidates step6+step7's current logic (`list_scene_transforms()`, `set_object_transform()`, `ObjectTransform`) into one importable module; step files moved to `learning_steps/` and kept unchanged as the historical record. Decided: flat files, not folders-per-concern — current code volume (1 schema, 2 functions) doesn't justify a `schemas/`/`tools/`/`agent/` folder split; revisit if any single concern grows past ~4-5 files.
 9. **Agent tool-design decision.** The agent gets exactly ONE tool: `set_object_transform`. Finding/listing objects stays code-orchestrated (same Code vs. agent rule as step 5) — the orchestrator calls `list_scene_transforms()` *before* invoking the agent and injects the result as context, rather than giving the agent a `find_object` tool to call itself. Scene inspection has no ambiguity; only "what to set, for the mood" does.
+10. `tools.py` — single-axis edit fix (Eran caught it live): original design forced all 3 position/rotation axes together, blocking a real need ("rotate just the Y axis"). Fixed by reading the object's current transform first and merging in only the given axis/axes.
+11. `agent.py` + `main.py` — the full pipeline, end to end. `uv run python main.py "task"` → `get_scene_context()` (code-orchestrated) → one prompt string → `Runner.run` → agent calls `set_object_transform` → real scene change. Verified live both in code and visually in the Editor.
+12. **Two design-smell fixes, both caught by Eran, not by me.** First: `build_agent_input(task)` conflated scene-fetching (task-independent) with the task string behind one opaque combined output — split into `get_scene_context()` (no task param) + task passed separately. Second, a self-correction on my own first fix: I'd changed the call into a fake 2-message `[{"role":"user",...}, {"role":"user",...}]` list, but that format exists for real multi-turn conversation history (alternating user/assistant), not for artificially splitting one input in two — reverted to a single plain prompt string.
+13. **Real agent judgment test — found a real bug.** Asked the agent to rotate the Directional Light to simulate noon sunlight (ambiguous task, no literal coordinates given). Agent set `rot_x = 270°` — Unity's convention for straight-up-from-below, the *opposite* of overhead. Tool execution was correct; the agent's reasoning about the rotation convention was wrong. Result: scene went black. **Caught only by Eran looking at the Editor — we have no automated way to catch this ourselves.** This is exactly the gap v1's judge step exists to close (see Open gap below). Fixed by telling the agent the correct value (`rot_x = 90°`) directly.
 
 ### Code vs. agent, the actual rule (locked in at step 5)
 
@@ -174,9 +178,26 @@ instead of implicit.
 - **Agent harness**: **OpenAI Agents SDK** — decided. Chosen deliberately to
   double as hands-on reinforcement of the FDE roadmap course material (Week 2).
 
+## Open gap found by real testing (2026-11-17)
+
+The noon-sunlight test (build log #13) proved the actual risk v1's judge
+step is meant to address: the agent can execute a tool call correctly while
+reasoning about rotation/direction conventions *incorrectly*, with no
+automated way for us to catch it — only a human looking at the Editor did.
+v0 has zero visual feedback loop. This is now the strongest real argument
+for building v1 next, not just a theoretical nice-to-have.
+
 ## Repo layout
 
 ```
-docs/            design notes, architecture decisions
-(agent code, Unity project, etc. — added as v0 work actually starts)
+README.md                      architecture, build log, decisions
+docs/                           design notes (Unity CLI findings, etc.)
+MoodLightingScene/               the Unity project (URP, 6000.5.7f1)
+agent/
+  src/unity_mood_lighting_agent/
+    unity_bridge.py              current: ObjectTransform, list_scene_transforms(), set_object_transform()
+    tools.py                     the agent's one tool (wraps unity_bridge)
+    agent.py                     the Agent + get_scene_context()
+    main.py                      entry point: uv run python main.py "task"
+    learning_steps/              steps 1-7, kept as the historical build record
 ```
