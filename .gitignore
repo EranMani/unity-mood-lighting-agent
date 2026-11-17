@@ -6,6 +6,12 @@ venv/
 .env
 agent/.venv/
 
+# Unity CLI agent skills (vendored by `npx skills add Unity-Technologies/skills`,
+# reproducible on demand — see docs/unity-cli-connection.md — not our content)
+/.agents/
+/.claude/
+/skills-lock.json
+
 # Unity (applies once a Unity project folder is added under this repo)
 [Ll]ibrary/
 [Tt]emp/
