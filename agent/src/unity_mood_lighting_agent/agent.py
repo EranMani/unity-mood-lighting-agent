@@ -10,7 +10,7 @@ agent's job.
 
 from agents import Agent
 
-from unity_mood_lighting_agent.tools import set_light_properties, set_object_transform
+from unity_mood_lighting_agent.tools import create_light, set_light_properties, set_object_transform
 from unity_mood_lighting_agent.unity_bridge import list_scene_transforms
 
 agent = Agent(
@@ -19,14 +19,16 @@ agent = Agent(
         "You adjust a Unity scene's lighting to match a requested mood "
         "(e.g. 'horror', 'cozy'). You will be given the current scene's "
         "objects with their instance_id, position, and rotation. Use "
-        "set_object_transform to move/rotate objects, and "
-        "set_light_properties to change a light's intensity, color, color "
-        "temperature (Kelvin — lower is warmer), and bounce/indirect "
-        "intensity. You don't have to provide every value each call — "
-        "omit what you don't want to change."
+        "set_object_transform to move/rotate objects, set_light_properties "
+        "to change a light's intensity, color, color temperature (Kelvin — "
+        "lower is warmer), and bounce/indirect intensity, and create_light "
+        "to add a new light if the mood genuinely needs one the scene "
+        "doesn't have (e.g. a single dim light often can't produce real "
+        "contrast or shadow). You don't have to provide every value each "
+        "call — omit what you don't want to change."
     ),
     model="gpt-5.4-mini",
-    tools=[set_object_transform, set_light_properties],
+    tools=[set_object_transform, set_light_properties, create_light],
 )
 
 

@@ -301,3 +301,106 @@ def set_light_properties(
             text=True,
             check=True,
         )
+
+
+_VALID_LIGHT_TYPES = {"Spot", "Directional", "Point", "Rectangle", "Disc", "Pyramid", "Box", "Tube"}
+
+# Creates the GameObject + sets position via script eval (ONE call,
+# precise GetEntityId()) rather than the `gameobject create` CLI command.
+# Real bug found live: `gameobject create`'s own JSON response truncates
+# large instanceIds (float precision loss somewhere in its JSON encoding —
+# e.g. returned ...755000 for an object whose real ID was ...755038), so an
+# ID read from that command's output can silently fail every later command
+# ("No loaded object with instanceId...") even though the object exists and
+# gameobject find can locate it by name. script eval's GetEntityId() does
+# not have this problem (same precise path list_scene_transforms() uses) —
+# never trust a CLI JSON command's own returned instanceId for a large
+# number, only script eval's. See docs/unity-cli-connection.md.
+_CREATE_SCRIPT = """
+var go = new UnityEngine.GameObject("__NAME__");
+go.transform.position = new UnityEngine.Vector3(__POS_X__f, __POS_Y__f, __POS_Z__f);
+return new { instance_id = go.GetEntityId().ToString() };
+""".strip()
+
+
+def create_light(
+    name: str,
+    position: tuple[float, float, float],
+    light_type: str = "Point",
+) -> str:
+    """Create a new Light GameObject at position, with a Light component of
+    light_type (Spot, Directional, Point, Rectangle, Disc, Pyramid, Box, or
+    Tube — Unity's actual enum values, unquoted on the CLI). Returns the new
+    object's instance_id (same ID space/session-dynamic caveat as
+    list_scene_transforms(), read via script eval for precision — see
+    docs/unity-cli-connection.md). Use set_light_properties afterward for
+    intensity/color/etc, and set_object_transform for rotation."""
+    if light_type not in _VALID_LIGHT_TYPES:
+        raise ValueError(f"light_type must be one of {_VALID_LIGHT_TYPES}, got {light_type!r}")
+
+    script = (
+        _CREATE_SCRIPT.replace("__NAME__", name)
+        .replace("__POS_X__", str(position[0]))
+        .replace("__POS_Y__", str(position[1]))
+        .replace("__POS_Z__", str(position[2]))
+    )
+    create_result = subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    instance_id = json.loads(create_result.stdout)["instance_id"]
+
+    subprocess.run(
+        [
+            UNITY_EXE,
+            "command",
+            "component add",
+            "--target",
+            instance_id,
+            "--type",
+            "Light",
+            "--project-path",
+            PROJECT_PATH,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    if light_type != "Point":  # Point is the Light component's own default
+        subprocess.run(
+            [
+                UNITY_EXE,
+                "command",
+                "component set_field",
+                "--target",
+                instance_id,
+                "--component",
+                "Light",
+                "--field",
+                "m_Type",
+                "--value",
+                light_type,
+                "--project-path",
+                PROJECT_PATH,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+    return instance_id
+
+
+def count_lights() -> int:
+    """How many Light components currently exist in the scene. Used by the
+    MAX_LIGHTS guardrail in tools.py before create_light runs."""
+    result = subprocess.run(
+        [UNITY_EXE, "command", "gameobject find", "--type", "Light", "--project-path", PROJECT_PATH, "--result-only"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return len(json.loads(result.stdout))

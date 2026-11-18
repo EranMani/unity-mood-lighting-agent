@@ -16,9 +16,17 @@ acceptable at this scene size.
 
 from agents import function_tool
 
-from unity_mood_lighting_agent.unity_bridge import check_rotation_aims_at_geometry, get_light_properties, list_scene_transforms
+from unity_mood_lighting_agent.unity_bridge import (
+    check_rotation_aims_at_geometry,
+    count_lights,
+    create_light as _create_light,
+    get_light_properties,
+    list_scene_transforms,
+)
 from unity_mood_lighting_agent.unity_bridge import set_light_properties as _set_light_properties
 from unity_mood_lighting_agent.unity_bridge import set_object_transform as _set_object_transform
+
+MAX_LIGHTS = 6  # per README v0 guardrail plan: "total light count stays under a cap"
 
 
 def _merge_axis(current: float, new: float | None) -> float:
@@ -129,3 +137,31 @@ def set_light_properties(
     )
     current = get_light_properties(target)
     return f"Updated light {target}: {current}"
+
+
+@function_tool
+def create_light(
+    name: str,
+    pos_x: float,
+    pos_y: float,
+    pos_z: float,
+    light_type: str = "Point",
+) -> str:
+    """Create a NEW Light GameObject at the given position. Use this when
+    the mood genuinely needs more light sources than currently exist (e.g.
+    one dim directional light often can't produce real contrast/shadows —
+    multiple lights with different roles, same idea as a photography/film
+    key/fill/rim setup, may serve a mood better than endlessly tweaking one
+    light). light_type is one of: Spot, Directional, Point, Rectangle,
+    Disc, Pyramid, Box, Tube. Returns the new light's instance_id — use
+    set_light_properties and set_object_transform on it afterward for
+    intensity/color/rotation."""
+    if count_lights() >= MAX_LIGHTS:
+        return f"Rejected: scene already has {MAX_LIGHTS} lights (the cap). Adjust existing lights instead of adding more."
+
+    try:
+        instance_id = _create_light(name=name, position=(pos_x, pos_y, pos_z), light_type=light_type)
+    except ValueError as e:
+        return f"Rejected: {e}"
+
+    return f"Created light '{name}' (instance_id={instance_id}) at ({pos_x}, {pos_y}, {pos_z}), type={light_type}."
