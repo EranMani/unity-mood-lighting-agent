@@ -77,6 +77,17 @@ def list_scene_transforms() -> list[ObjectTransform]:
 # getting the rotation convention wrong by hand is exactly the bug class
 # this guardrail exists to catch (see build log #13). The ray ignores the
 # light's own collider (if any) so it doesn't just hit itself at distance 0.
+#
+# HOW THIS AVOIDS TOUCHING THE REAL OBJECT: nothing below ever reads or
+# writes any GameObject's actual transform. `origin`/`rot`/`direction` are
+# just numbers computed in memory — "IF something were at this position
+# with this rotation, which way would it face." Physics.RaycastAll only
+# needs an origin point + a direction to fire a ray; it doesn't know or
+# care whether any real object in the scene actually has that position/
+# rotation. So this is a pure "what-if" query against the scene's existing
+# colliders — the light itself sits completely untouched while this runs.
+# Only set_object_transform() below (called separately, after this check
+# passes) ever actually moves/rotates the real GameObject.
 _RAYCAST_CANDIDATE_SCRIPT = """
 var origin = new UnityEngine.Vector3(__POS_X__f, __POS_Y__f, __POS_Z__f);
 var rot = UnityEngine.Quaternion.Euler(__ROT_X__f, __ROT_Y__f, __ROT_Z__f);
