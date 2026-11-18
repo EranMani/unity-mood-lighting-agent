@@ -1,11 +1,11 @@
 """
-tools.py — the agent's tool(s).
+tools.py — the agent's tools.
 
-Per the locked-in design decision: the agent gets exactly ONE tool,
-set_object_transform. Finding/listing objects is NOT a tool — that stays
-code-orchestrated (list_scene_transforms() is called before the agent runs,
-its result injected as context). See README "Code vs. agent, the actual
-rule" and learning_steps/step5 for why.
+Originally locked in as exactly ONE tool (set_object_transform). Expanded
+to add set_light_properties once the project moved past position/rotation
+into intensity/color/color-temp/bounce — same code-vs-agent split still
+applies (listing/reading stays code-orchestrated via list_scene_transforms(),
+injected as context, not a tool call).
 
 Single-axis edits: the Unity CLI's set_transform has no per-axis update —
 it's all 3 position values or none, same for rotation. So this tool reads
@@ -16,7 +16,8 @@ acceptable at this scene size.
 
 from agents import function_tool
 
-from unity_mood_lighting_agent.unity_bridge import check_rotation_aims_at_geometry, list_scene_transforms
+from unity_mood_lighting_agent.unity_bridge import check_rotation_aims_at_geometry, get_light_properties, list_scene_transforms
+from unity_mood_lighting_agent.unity_bridge import set_light_properties as _set_light_properties
 from unity_mood_lighting_agent.unity_bridge import set_object_transform as _set_object_transform
 
 
@@ -87,3 +88,44 @@ def set_object_transform(
 
     _set_object_transform(target=target, position=position, rotation=rotation)
     return f"Moved/rotated {target}: position={position}, rotation={rotation}"
+
+
+@function_tool
+def set_light_properties(
+    target: str,
+    intensity: float | None = None,
+    color_r: float | None = None,
+    color_g: float | None = None,
+    color_b: float | None = None,
+    color_temperature: float | None = None,
+    bounce_intensity: float | None = None,
+) -> str:
+    """Set a Light's intensity, color (RGB, each 0-1, give all 3 together),
+    color temperature in Kelvin (lower=warmer, e.g. 1800=candle, 6500=cool
+    daylight), and/or bounce/indirect intensity. Omit any field to leave it
+    unchanged. target is the instance_id from the scene context."""
+    color = None
+    if color_r is not None or color_g is not None or color_b is not None:
+        if color_r is None or color_g is None or color_b is None:
+            return "Error: give all three of color_r, color_g, color_b together, not just some."
+        color = (color_r, color_g, color_b)
+
+    # Guardrail (per README v0 plan: "intensity > 0 and below a sane max"):
+    # a non-positive or absurd intensity is almost certainly a mistake, not
+    # an intentional "turn the light off" — there's no tool for removing a
+    # light, so a 0/negative intensity would just silently blind the scene
+    # with no visual feedback explaining why.
+    if intensity is not None and not (0 < intensity <= 20):
+        return f"Rejected: intensity {intensity} is out of the sane range (0, 20]. Pick a smaller positive value."
+    if bounce_intensity is not None and not (0 <= bounce_intensity <= 5):
+        return f"Rejected: bounce_intensity {bounce_intensity} is out of the sane range [0, 5]."
+
+    _set_light_properties(
+        target=target,
+        intensity=intensity,
+        color=color,
+        color_temperature=color_temperature,
+        bounce_intensity=bounce_intensity,
+    )
+    current = get_light_properties(target)
+    return f"Updated light {target}: {current}"
