@@ -52,3 +52,14 @@ Found, confirmed to exist, not yet called live.
 ## Open items
 `gameobject create` + `component add` (make lights), `capture screenshot`
 (v1 judge loop) — not yet tested.
+
+## instanceId is session-dynamic — always re-fetch, never hardcode
+`instance_id`/`instanceId` values (from `GetEntityId()` or `gameobject
+find`) are NOT stable across Editor restarts/domain reloads — same object,
+different session, different ID. Confirmed live: reused an ID from an
+earlier session, `component set_field` failed with "No loaded object with
+instanceId...". Not a bug, not two ID spaces — `GetEntityId().ToString()`
+and `gameobject find`'s `instanceId` ARE the same space, confirmed matching
+in the same session. Rule: always call `list_scene_transforms()` /
+`gameobject find` fresh within the current session before using an ID;
+never cache or hardcode one across runs.

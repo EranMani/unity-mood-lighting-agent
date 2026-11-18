@@ -209,3 +209,95 @@ def capture_game_view(output_path: str | None = None) -> CaptureResult:
     )
     raw = json.loads(result.stdout)
     return CaptureResult(path=raw["savedPath"], width=raw["width"], height=raw["height"])
+
+
+class LightProperties(BaseModel):
+    """Current/target values for a Light component's mood-relevant fields."""
+
+    intensity: float | None = None
+    color_r: float | None = Field(default=None, description="0-1.")
+    color_g: float | None = Field(default=None, description="0-1.")
+    color_b: float | None = Field(default=None, description="0-1.")
+    color_temperature: float | None = Field(default=None, description="Kelvin, e.g. 1800=warm candle, 6500=cool daylight.")
+    bounce_intensity: float | None = Field(default=None, description="Indirect/bounce light multiplier.")
+
+
+def get_light_properties(target: str) -> LightProperties:
+    """Read a Light component's current mood-relevant fields by instance_id
+    (same ID space as list_scene_transforms() — fetch it fresh this session,
+    see docs/unity-cli-connection.md on why IDs aren't stable across
+    sessions)."""
+    result = subprocess.run(
+        [
+            UNITY_EXE,
+            "command",
+            "component get_fields",
+            "--target",
+            target,
+            "--component",
+            "Light",
+            "--detail",
+            "value",
+            "--project-path",
+            PROJECT_PATH,
+            "--result-only",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    raw = json.loads(result.stdout)
+    color = raw.get("m_Color") or {}
+    return LightProperties(
+        intensity=raw.get("m_Intensity"),
+        color_r=color.get("r"),
+        color_g=color.get("g"),
+        color_b=color.get("b"),
+        color_temperature=raw.get("m_ColorTemperature"),
+        bounce_intensity=raw.get("m_BounceIntensity"),
+    )
+
+
+def set_light_properties(
+    target: str,
+    intensity: float | None = None,
+    color: tuple[float, float, float] | None = None,
+    color_temperature: float | None = None,
+    bounce_intensity: float | None = None,
+) -> None:
+    """Set a Light component's mood-relevant fields by instance_id. Omit a
+    field to leave it unchanged. color is (r, g, b), each 0-1.
+    color_temperature is Kelvin and only visibly applies while
+    m_UseColorTemperature is true (true by default on this scene's light —
+    not managed here, see docs if that ever needs toggling)."""
+    calls: list[tuple[str, object]] = []
+    if intensity is not None:
+        calls.append(("m_Intensity", intensity))
+    if color is not None:
+        calls.append(("m_Color", {"r": color[0], "g": color[1], "b": color[2], "a": 1.0}))
+    if color_temperature is not None:
+        calls.append(("m_ColorTemperature", color_temperature))
+    if bounce_intensity is not None:
+        calls.append(("m_BounceIntensity", bounce_intensity))
+
+    for field, value in calls:
+        subprocess.run(
+            [
+                UNITY_EXE,
+                "command",
+                "component set_field",
+                "--target",
+                target,
+                "--component",
+                "Light",
+                "--field",
+                field,
+                "--value",
+                json.dumps(value),
+                "--project-path",
+                PROJECT_PATH,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
