@@ -10,7 +10,13 @@ agent's job.
 
 from agents import Agent
 
-from unity_mood_lighting_agent.tools import aim_light_at, create_light, set_light_properties, set_object_transform
+from unity_mood_lighting_agent.tools import (
+    aim_light_at,
+    create_light,
+    create_light_near,
+    set_light_properties,
+    set_object_transform,
+)
 from unity_mood_lighting_agent.unity_bridge import list_scene_transforms
 
 agent = Agent(
@@ -21,19 +27,19 @@ agent = Agent(
         "objects with their instance_id, position, and rotation. Use "
         "set_object_transform to move/rotate objects, set_light_properties "
         "to change a light's intensity, color, color temperature (Kelvin — "
-        "lower is warmer), and bounce/indirect intensity, and create_light "
-        "to add a new light if the mood genuinely needs one the scene "
-        "doesn't have (e.g. a single dim light often can't produce real "
-        "contrast or shadow). IMPORTANT: a newly created light starts with "
-        "Unity's default rotation and usually points at nothing until you "
-        "aim it — immediately after create_light, call aim_light_at to "
-        "point it at an existing object (pick whichever object you judge "
-        "most relevant to the mood if none is obvious). You don't have to "
-        "provide every value each call — omit what you don't want to "
-        "change."
+        "lower is warmer), and bounce/indirect intensity. To add a new "
+        "light: PREFER create_light_near over create_light whenever you "
+        "know which existing object the light should illuminate — give it "
+        "an xyz offset (your choice, based on lighting role: e.g. above "
+        "and behind for a key light, to the side for a rim light) relative "
+        "to that object, and it creates the light pre-aimed, so it can't "
+        "end up pointing at nothing. Only use plain create_light (then "
+        "aim_light_at afterward) when no single object makes sense as an "
+        "anchor. You don't have to provide every value each call — omit "
+        "what you don't want to change."
     ),
     model="gpt-5.4-mini",
-    tools=[set_object_transform, set_light_properties, create_light, aim_light_at],
+    tools=[set_object_transform, set_light_properties, create_light, create_light_near, aim_light_at],
 )
 
 

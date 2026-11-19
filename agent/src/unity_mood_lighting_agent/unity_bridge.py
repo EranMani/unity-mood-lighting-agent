@@ -23,12 +23,47 @@ PROJECT_PATH = r"D:\AI\MyProjects\unity-mood-lighting-agent\MoodLightingScene"
 # GetInstanceID() is obsolete in this Unity version (hard compile error).
 # GetEntityId() replaces it, but the raw struct serializes to {} (no public
 # fields) — .ToString() is required for a usable value.
+#
+# Rule (locked in live with Eran after finding "Wall" had zero colliders
+# anywhere, only its individual prop children did — aiming/raycasting at
+# root-only objects silently missed real geometry):
+#   - For each ROOT object: if it or any descendant has a Collider, emit
+#     one entry per DIRECT CHILD of that root that itself has a Collider
+#     (or the root itself, if the collider sits directly on the root with
+#     no container level) — this is "one level below root," not the
+#     absolute top, since collapsing a whole prop-container (e.g. "Asset"
+#     holding 16 distinct props) to one point would throw away real,
+#     individually meaningful objects.
+#   - If a root has NO collider anywhere in its subtree (Main Camera,
+#     Global Volume, a Light with no collider), emit the root itself
+#     unchanged — so non-collidable objects the agent still needs to see/
+#     move (lights, camera) don't silently disappear from scene context.
 _READ_SCRIPT = """
+System.Collections.Generic.IEnumerable<UnityEngine.Transform> AllDescendants(UnityEngine.Transform t) {
+  foreach (UnityEngine.Transform child in t) {
+    yield return child;
+    foreach (var grandchild in AllDescendants(child)) yield return grandchild;
+  }
+}
+bool HasColliderAnywhere(UnityEngine.Transform t) {
+  if (t.gameObject.GetComponent<UnityEngine.Collider>() != null) return true;
+  foreach (var d in AllDescendants(t)) {
+    if (d.gameObject.GetComponent<UnityEngine.Collider>() != null) return true;
+  }
+  return false;
+}
+object Entry(UnityEngine.Transform t) {
+  var p = t.position; var r = t.eulerAngles;
+  return new { instance_id = t.gameObject.GetEntityId().ToString(), name = t.gameObject.name, pos_x = p.x, pos_y = p.y, pos_z = p.z, rot_x = r.x, rot_y = r.y, rot_z = r.z };
+}
 var list = new System.Collections.Generic.List<object>();
 foreach (var t in UnityEngine.Object.FindObjectsByType<UnityEngine.Transform>()) {
   if (t.parent != null) continue;
-  var p = t.position; var r = t.eulerAngles;
-  list.Add(new { instance_id = t.gameObject.GetEntityId().ToString(), name = t.gameObject.name, pos_x = p.x, pos_y = p.y, pos_z = p.z, rot_x = r.x, rot_y = r.y, rot_z = r.z });
+  if (!HasColliderAnywhere(t)) { list.Add(Entry(t)); continue; }
+  if (t.gameObject.GetComponent<UnityEngine.Collider>() != null) { list.Add(Entry(t)); continue; }
+  foreach (UnityEngine.Transform child in t) {
+    if (child.gameObject.GetComponent<UnityEngine.Collider>() != null) list.Add(Entry(child));
+  }
 }
 return list;
 """.strip()

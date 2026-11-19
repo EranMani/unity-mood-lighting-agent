@@ -213,3 +213,55 @@ def aim_light_at(light_target: str, aim_at_target: str) -> str:
         target_position=(aim_at.pos_x, aim_at.pos_y, aim_at.pos_z),
     )
     return _apply_transform_with_guardrail(light_target, position=None, rotation=rotation)
+
+
+@function_tool
+def create_light_near(
+    name: str,
+    aim_at_target: str,
+    offset_x: float,
+    offset_y: float,
+    offset_z: float,
+    light_type: str = "Point",
+) -> str:
+    """Create a NEW light positioned relative to an EXISTING object
+    (aim_at_target's instance_id), pre-aimed at that object — this is the
+    preferred way to create a light when you know what it should
+    illuminate, since it can't produce the 'light points at nothing' bug
+    create_light can. YOU choose offset_x/y/z (relative to the target, in
+    world units) based on lighting role/theory: e.g. above and slightly
+    behind for a key light, to the side at the same height for a rim
+    light, in front and low for an uplight. The offset is added to the
+    target's position to get the light's actual position; the light is
+    then rotated to face back at the target. Use create_light instead if
+    the light shouldn't be tied to one specific object's position."""
+    if count_lights() >= MAX_LIGHTS:
+        return f"Rejected: scene already has {MAX_LIGHTS} lights (the cap). Adjust existing lights instead of adding more."
+
+    aim_at = next((o for o in list_scene_transforms() if o.instance_id == aim_at_target), None)
+    if aim_at is None:
+        return f"Error: no object with instance_id {aim_at_target} found in the scene."
+
+    if offset_x == 0 and offset_y == 0 and offset_z == 0:
+        return "Rejected: offset_x/y/z are all 0 — the light would be placed exactly at the target's position, giving no direction to aim toward."
+
+    light_position = (aim_at.pos_x + offset_x, aim_at.pos_y + offset_y, aim_at.pos_z + offset_z)
+    target_position = (aim_at.pos_x, aim_at.pos_y, aim_at.pos_z)
+
+    try:
+        instance_id = _create_light(name=name, position=light_position, light_type=light_type)
+    except ValueError as e:
+        return f"Rejected: {e}"
+
+    rotation = compute_look_at_rotation(light_position=light_position, target_position=target_position)
+    check = check_rotation_aims_at_geometry(light_position, rotation, self_id=instance_id)
+    if not check.hit:
+        return (
+            f"Created light '{name}' (instance_id={instance_id}) at {light_position}, aimed at "
+            f"{aim_at_target}, type={light_type}. WARNING: even aimed at the target's position, the "
+            "ray found no geometry — the offset may be too large (target itself might be out of "
+            "raycast range) or something is blocking it. Check with set_object_transform/aim_light_at."
+        )
+
+    _set_object_transform(target=instance_id, position=None, rotation=rotation)
+    return f"Created light '{name}' (instance_id={instance_id}) at {light_position}, aimed at {aim_at_target}, type={light_type}."
