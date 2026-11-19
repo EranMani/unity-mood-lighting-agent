@@ -39,3 +39,4 @@ agent/.venv/
 # OS
 .DS_Store
 Thumbs.db
+agent/src/unity_mood_lighting_agent/.hermes-tmp.*
