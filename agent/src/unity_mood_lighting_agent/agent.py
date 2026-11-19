@@ -20,7 +20,12 @@ from unity_mood_lighting_agent.tools import (
     set_object_transform,
     set_vignette,
 )
-from unity_mood_lighting_agent.unity_bridge import list_scene_transforms
+from unity_mood_lighting_agent.unity_bridge import (
+    get_color_adjustments,
+    get_fog,
+    get_vignette,
+    list_scene_transforms,
+)
 
 agent = Agent(
     name="MoodLightingAgent",
@@ -64,11 +69,40 @@ agent = Agent(
 
 def get_scene_context() -> str:
     """Fetches the current scene state — independent of any task, this is
-    the code-orchestrated 'find' step (not a tool the agent calls)."""
+    the code-orchestrated 'find' step (not a tool the agent calls). This
+    is ground truth re-read fresh every call, NOT memory — it has no
+    history, it's just what Unity currently is. Includes current
+    post-processing state (ColorAdjustments/Vignette/Fog) alongside
+    object transforms: found live (Eran caught it) that without this, the
+    agent reasoned about each render lever (lights, exposure, vignette,
+    fog) in isolation, each individually 'reasonable for a tense mood,'
+    and ended up stacking several darkening/desaturating effects on top
+    of each other into an unreadable, overly flat result. Seeing what's
+    ALREADY applied lets it reason about cumulative effect instead."""
     scene = list_scene_transforms()
-    return "\n".join(
+    transforms_section = "\n".join(
         f"- {o.name} (instance_id={o.instance_id}): "
         f"pos=({o.pos_x}, {o.pos_y}, {o.pos_z}), "
         f"rot=({o.rot_x}, {o.rot_y}, {o.rot_z})"
         for o in scene
     )
+
+    color = get_color_adjustments()
+    vignette = get_vignette()
+    fog = get_fog()
+    post_processing_section = (
+        "Current scene-wide post-processing (these effects STACK with "
+        "each other and with individual light changes — if several are "
+        "already pushing the scene darker/colder/more desaturated, adding "
+        "more on top often over-darkens and flattens the image instead of "
+        "improving the mood; consider whether you should pull one lever "
+        "back rather than pushing a different one further):\n"
+        f"- ColorAdjustments: post_exposure={color.post_exposure}, contrast={color.contrast}, "
+        f"saturation={color.saturation}, color_filter=({color.color_filter_r}, {color.color_filter_g}, {color.color_filter_b})\n"
+        f"- Vignette: intensity={vignette.intensity}, smoothness={vignette.smoothness}\n"
+        f"- Fog: enabled={fog.enabled}, density={fog.density}, "
+        f"start_distance={fog.start_distance}, end_distance={fog.end_distance}, "
+        f"color=({fog.color_r}, {fog.color_g}, {fog.color_b})"
+    )
+
+    return f"{transforms_section}\n\n{post_processing_section}"
