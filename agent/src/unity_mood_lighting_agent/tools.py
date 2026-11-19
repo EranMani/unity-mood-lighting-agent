@@ -21,6 +21,7 @@ from unity_mood_lighting_agent.unity_bridge import (
     compute_look_at_rotation,
     count_lights,
     create_light as _create_light,
+    delete_object as _delete_object,
     get_light_properties,
     get_scene_bounds,
     list_scene_transforms,
@@ -38,6 +39,15 @@ MAX_LIGHTS = 10  # per README v0 guardrail plan: "total light count stays under 
 # 10 gives real headroom above anything asked for so far while still being
 # a real bound, not "no cap" - the cap exists to stop runaway light spam,
 # not to block legitimate setups.
+
+AGENT_LIGHT_PREFIX = "AgentLight_"
+# Ground rule set by Eran: the agent may add/remove its OWN lights, never
+# the scene's original lights. Tagging happens in CODE at creation time
+# (create_light/create_light_near below prepend this, unconditionally),
+# not by asking the agent to follow a naming convention — this project
+# has already hit "trust the LLM to follow an instruction exactly" bugs
+# twice (step 13's rotation sign, step 25's name-vs-id mixup), so anything
+# that must be reliable goes through code, not a prompt request.
 
 
 def _merge_axis(current: float, new: float | None) -> float:
@@ -201,8 +211,9 @@ def create_light(
     if count_lights() >= MAX_LIGHTS:
         return f"Rejected: scene already has {MAX_LIGHTS} lights (the cap). Adjust existing lights instead of adding more."
 
+    tagged_name = f"{AGENT_LIGHT_PREFIX}{name}"
     try:
-        instance_id = _create_light(name=name, position=(pos_x, pos_y, pos_z), light_type=light_type)
+        instance_id = _create_light(name=tagged_name, position=(pos_x, pos_y, pos_z), light_type=light_type)
     except ValueError as e:
         return f"Rejected: {e}"
 
@@ -214,13 +225,13 @@ def create_light(
     check = check_rotation_aims_at_geometry((pos_x, pos_y, pos_z), (0.0, 0.0, 0.0), self_id=instance_id)
     if not check.hit:
         return (
-            f"Created light '{name}' (instance_id={instance_id}) at ({pos_x}, {pos_y}, {pos_z}), "
+            f"Created light '{tagged_name}' (instance_id={instance_id}) at ({pos_x}, {pos_y}, {pos_z}), "
             f"type={light_type}. WARNING: it has Unity's default rotation (0,0,0) and currently "
             "points at nothing in the scene. Use aim_light_at to point it at an existing object, "
             "or set_object_transform to rotate it manually, before it has any visible effect."
         )
 
-    return f"Created light '{name}' (instance_id={instance_id}) at ({pos_x}, {pos_y}, {pos_z}), type={light_type}."
+    return f"Created light '{tagged_name}' (instance_id={instance_id}) at ({pos_x}, {pos_y}, {pos_z}), type={light_type}."
 
 
 @function_tool
@@ -281,8 +292,9 @@ def create_light_near(
     light_position = (aim_at.pos_x + offset_x, aim_at.pos_y + offset_y, aim_at.pos_z + offset_z)
     target_position = (aim_at.pos_x, aim_at.pos_y, aim_at.pos_z)
 
+    tagged_name = f"{AGENT_LIGHT_PREFIX}{name}"
     try:
-        instance_id = _create_light(name=name, position=light_position, light_type=light_type)
+        instance_id = _create_light(name=tagged_name, position=light_position, light_type=light_type)
     except ValueError as e:
         return f"Rejected: {e}"
 
@@ -290,14 +302,14 @@ def create_light_near(
     check = check_rotation_aims_at_geometry(light_position, rotation, self_id=instance_id)
     if not check.hit:
         return (
-            f"Created light '{name}' (instance_id={instance_id}) at {light_position}, aimed at "
+            f"Created light '{tagged_name}' (instance_id={instance_id}) at {light_position}, aimed at "
             f"{aim_at_target}, type={light_type}. WARNING: even aimed at the target's position, the "
             "ray found no geometry — the offset may be too large (target itself might be out of "
             "raycast range) or something is blocking it. Check with set_object_transform/aim_light_at."
         )
 
     _set_object_transform(target=instance_id, position=None, rotation=rotation)
-    return f"Created light '{name}' (instance_id={instance_id}) at {light_position}, aimed at {aim_at_target}, type={light_type}."
+    return f"Created light '{tagged_name}' (instance_id={instance_id}) at {light_position}, aimed at {aim_at_target}, type={light_type}."
 
 
 @function_tool
@@ -415,3 +427,44 @@ def set_fog(
         end_distance=end_distance,
     )
     return "Updated fog settings."
+
+
+@function_tool
+def delete_light(target: str) -> str:
+    """Delete a light THIS AGENT previously created (by instance_id or
+    name, from the scene context). Ground rule: the scene's ORIGINAL
+    lights can never be deleted, only lights this agent itself added via
+    create_light/create_light_near — this is enforced below, not just a
+    suggestion. Use this when a light you created isn't working for the
+    mood, instead of leaving it in place and stacking more on top."""
+    current = _resolve_target(list_scene_transforms(), target)
+    if current is None:
+        return f"Error: no object with instance_id or name '{target}' found in the scene."
+    if not current.name.startswith(AGENT_LIGHT_PREFIX):
+        return (
+            f"Rejected: '{current.name}' is one of the scene's original lights, not something "
+            "this agent created — it cannot be deleted."
+        )
+    _delete_object(current.instance_id)
+    return f"Deleted light '{current.name}' (instance_id={current.instance_id})."
+
+
+def cleanup_agent_lights() -> list[str]:
+    """Delete every light this agent has EVER created (identified by
+    AGENT_LIGHT_PREFIX), before a new task starts. Deterministic,
+    code-orchestrated, called once at the top of main.py's run() — not an
+    agent tool, since 'clear what we added last time, every time' has
+    exactly one correct answer, no judgment call involved (same Code vs.
+    agent rule as list_scene_transforms()). Decided live with Eran: cross-
+    session diff/history tracking (so the agent itself could reason about
+    what to keep vs. remove) is parked for a later, persistent-memory
+    phase of the project — this is the simple version for now, since each
+    `main.py` call is still a fresh, memoryless session. Scene-original
+    lights are never touched (same tag check as delete_light). Returns
+    the names of whatever got deleted, for visibility."""
+    deleted = []
+    for obj in list_scene_transforms():
+        if obj.name.startswith(AGENT_LIGHT_PREFIX):
+            _delete_object(obj.instance_id)
+            deleted.append(obj.name)
+    return deleted

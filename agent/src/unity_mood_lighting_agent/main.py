@@ -33,6 +33,7 @@ from dotenv import load_dotenv
 
 from unity_mood_lighting_agent.agent import agent, get_scene_context
 from unity_mood_lighting_agent.judge import judge_mood_match
+from unity_mood_lighting_agent.tools import cleanup_agent_lights
 
 load_dotenv()
 
@@ -56,6 +57,10 @@ def _log_result(task: str, attempts_used: int, passed: bool, judgement) -> None:
 
 
 async def run(task: str) -> str:
+    deleted = cleanup_agent_lights()
+    if deleted:
+        print(f"[cleanup] removed {len(deleted)} light(s) from a previous run: {deleted}")
+
     feedback = ""  # judge's notes from the previous failed attempt, if any
 
     for attempt in range(1, MAX_ATTEMPTS + 1):

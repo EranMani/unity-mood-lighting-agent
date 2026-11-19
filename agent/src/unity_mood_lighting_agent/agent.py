@@ -14,6 +14,7 @@ from unity_mood_lighting_agent.tools import (
     aim_light_at,
     create_light,
     create_light_near,
+    delete_light,
     set_color_adjustments,
     set_fog,
     set_light_properties,
@@ -50,8 +51,12 @@ agent = Agent(
         "once, not one light), set_vignette for darkened frame edges "
         "(tension/isolation/horror), and set_fog for depth/mystery or to "
         "obscure distant detail. These often matter as much as individual "
-        "lights for selling a mood. You don't have to provide every value "
-        "each call — omit what you don't want to change."
+        "lights for selling a mood. If a light you created isn't working "
+        "for the mood, use delete_light to remove it instead of leaving "
+        "it in place and adding more on top — you can only delete lights "
+        "you created yourself, never the scene's original lights. You "
+        "don't have to provide every value each call — omit what you "
+        "don't want to change."
     ),
     model="gpt-5.4-mini",
     tools=[
@@ -59,6 +64,7 @@ agent = Agent(
         set_light_properties,
         create_light,
         create_light_near,
+        delete_light,
         aim_light_at,
         set_color_adjustments,
         set_vignette,

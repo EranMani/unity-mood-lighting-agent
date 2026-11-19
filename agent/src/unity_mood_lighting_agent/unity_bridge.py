@@ -460,6 +460,21 @@ def count_lights() -> int:
     return len(json.loads(result.stdout))
 
 
+def delete_object(target: str) -> None:
+    """Delete a GameObject from the scene by instance_id. Confirmed live
+    via `unity command --query delete`: `gameobject delete` takes exactly
+    one param, --target (reversible via Unity's own Undo, not exposed
+    here). Deterministic, no LLM involved — tools.py's delete_light is
+    responsible for deciding WHICH lights are safe to delete; this
+    function just executes the deletion once that's decided."""
+    subprocess.run(
+        [UNITY_EXE, "command", "gameobject delete", "--target", str(target), "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
 # Pure calculation, no Unity object touched — uses Unity's own
 # Quaternion.LookRotation (not hand-rolled trig, same principle as the
 # raycast guardrail's use of Quaternion.Euler) to compute "what rotation
