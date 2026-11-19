@@ -404,3 +404,46 @@ def count_lights() -> int:
         check=True,
     )
     return len(json.loads(result.stdout))
+
+
+# Pure calculation, no Unity object touched — uses Unity's own
+# Quaternion.LookRotation (not hand-rolled trig, same principle as the
+# raycast guardrail's use of Quaternion.Euler) to compute "what rotation
+# makes something at light_position face target_position." Returns a plain
+# euler tuple so callers can feed it straight into set_object_transform's
+# existing rotation path, including its guardrail — this function does NOT
+# apply anything itself, avoiding a second write path to keep in sync.
+_LOOK_AT_SCRIPT = """
+var lightPos = new UnityEngine.Vector3(__LIGHT_X__f, __LIGHT_Y__f, __LIGHT_Z__f);
+var targetPos = new UnityEngine.Vector3(__TARGET_X__f, __TARGET_Y__f, __TARGET_Z__f);
+var dir = (targetPos - lightPos).normalized;
+var rot = UnityEngine.Quaternion.LookRotation(dir);
+var e = rot.eulerAngles;
+return new { rot_x = e.x, rot_y = e.y, rot_z = e.z };
+""".strip()
+
+
+def compute_look_at_rotation(
+    light_position: tuple[float, float, float],
+    target_position: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """Compute the euler rotation that makes an object at light_position
+    face target_position, via Unity's own Quaternion.LookRotation. Does NOT
+    apply anything — pass the result to set_object_transform's rotation
+    args, which also runs the raycast guardrail on the result."""
+    script = (
+        _LOOK_AT_SCRIPT.replace("__LIGHT_X__", str(light_position[0]))
+        .replace("__LIGHT_Y__", str(light_position[1]))
+        .replace("__LIGHT_Z__", str(light_position[2]))
+        .replace("__TARGET_X__", str(target_position[0]))
+        .replace("__TARGET_Y__", str(target_position[1]))
+        .replace("__TARGET_Z__", str(target_position[2]))
+    )
+    result = subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    raw = json.loads(result.stdout)
+    return (raw["rot_x"], raw["rot_y"], raw["rot_z"])

@@ -10,7 +10,7 @@ agent's job.
 
 from agents import Agent
 
-from unity_mood_lighting_agent.tools import create_light, set_light_properties, set_object_transform
+from unity_mood_lighting_agent.tools import aim_light_at, create_light, set_light_properties, set_object_transform
 from unity_mood_lighting_agent.unity_bridge import list_scene_transforms
 
 agent = Agent(
@@ -24,11 +24,16 @@ agent = Agent(
         "lower is warmer), and bounce/indirect intensity, and create_light "
         "to add a new light if the mood genuinely needs one the scene "
         "doesn't have (e.g. a single dim light often can't produce real "
-        "contrast or shadow). You don't have to provide every value each "
-        "call — omit what you don't want to change."
+        "contrast or shadow). IMPORTANT: a newly created light starts with "
+        "Unity's default rotation and usually points at nothing until you "
+        "aim it — immediately after create_light, call aim_light_at to "
+        "point it at an existing object (pick whichever object you judge "
+        "most relevant to the mood if none is obvious). You don't have to "
+        "provide every value each call — omit what you don't want to "
+        "change."
     ),
     model="gpt-5.4-mini",
-    tools=[set_object_transform, set_light_properties, create_light],
+    tools=[set_object_transform, set_light_properties, create_light, aim_light_at],
 )
 
 

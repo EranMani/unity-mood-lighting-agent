@@ -18,6 +18,7 @@ from agents import function_tool
 
 from unity_mood_lighting_agent.unity_bridge import (
     check_rotation_aims_at_geometry,
+    compute_look_at_rotation,
     count_lights,
     create_light as _create_light,
     get_light_properties,
@@ -31,6 +32,37 @@ MAX_LIGHTS = 6  # per README v0 guardrail plan: "total light count stays under a
 
 def _merge_axis(current: float, new: float | None) -> float:
     return new if new is not None else current
+
+
+def _apply_transform_with_guardrail(
+    target: str,
+    position: tuple[float, float, float] | None,
+    rotation: tuple[float, float, float] | None,
+) -> str:
+    """Shared apply+guardrail path for set_object_transform and
+    aim_light_at — one write path, so the raycast guardrail (build log #13)
+    always runs no matter which tool is calling it, instead of being
+    re-implemented per tool and risking one copy missing it (exactly the
+    bug create_light had before this refactor)."""
+    current = next((o for o in list_scene_transforms() if o.instance_id == target), None)
+    if current is None:
+        return f"Error: no object with instance_id {target} found in the scene."
+
+    position_for_check = position if position is not None else (current.pos_x, current.pos_y, current.pos_z)
+    rotation_for_check = rotation if rotation is not None else (current.rot_x, current.rot_y, current.rot_z)
+    check = check_rotation_aims_at_geometry(position_for_check, rotation_for_check, self_id=target)
+    if not check.hit:
+        return (
+            f"Rejected: {target} at position={position_for_check} with rotation={rotation_for_check} "
+            "would point at nothing in the scene (no geometry within range). If you just changed "
+            "rotation, this usually means the rotation convention/sign is wrong — Unity's +X "
+            "rotation tilts the forward vector based on a specific convention, don't assume it "
+            "matches intuition. If you just changed position, the object's existing rotation may "
+            "no longer point toward any geometry from the new spot."
+        )
+
+    _set_object_transform(target=target, position=position, rotation=rotation)
+    return f"Moved/rotated {target}: position={position}, rotation={rotation}"
 
 
 @function_tool
@@ -72,30 +104,7 @@ def set_object_transform(
             _merge_axis(current.rot_z, rot_z),
         )
 
-    # Guardrail (locked in after build log #13's noon-sunlight bug): if the
-    # object's resulting direction points at nothing — not even the room's
-    # own geometry — that's almost certainly a reasoning error, not an
-    # intentional choice. Runs on ANY move that changes position and/or
-    # rotation (not just rotation alone): moving a light to a new spot can
-    # just as easily point its existing, unchanged rotation into empty
-    # space from the new position. Checked on the CANDIDATE values, before
-    # anything is applied to the live object.
-    if any_position or any_rotation:
-        position_for_check = position if position is not None else (current.pos_x, current.pos_y, current.pos_z)
-        rotation_for_check = rotation if rotation is not None else (current.rot_x, current.rot_y, current.rot_z)
-        check = check_rotation_aims_at_geometry(position_for_check, rotation_for_check, self_id=target)
-        if not check.hit:
-            return (
-                f"Rejected: {target} at position={position_for_check} with rotation={rotation_for_check} "
-                "would point at nothing in the scene (no geometry within range). If you just changed "
-                "rotation, this usually means the rotation convention/sign is wrong — Unity's +X "
-                "rotation tilts the forward vector based on a specific convention, don't assume it "
-                "matches intuition. If you just changed position, the object's existing rotation may "
-                "no longer point toward any geometry from the new spot."
-            )
-
-    _set_object_transform(target=target, position=position, rotation=rotation)
-    return f"Moved/rotated {target}: position={position}, rotation={rotation}"
+    return _apply_transform_with_guardrail(target, position, rotation)
 
 
 @function_tool
@@ -164,4 +173,43 @@ def create_light(
     except ValueError as e:
         return f"Rejected: {e}"
 
+    # Guardrail (bug found live by Eran: new lights got Unity's default
+    # rotation (0,0,0) and often pointed at nothing). Warn, don't auto-fix
+    # or delete — the agent already has aim_light_at/set_object_transform
+    # to fix it itself, and auto-deleting would need its own undo logic
+    # for no real benefit over just telling the agent what's wrong.
+    check = check_rotation_aims_at_geometry((pos_x, pos_y, pos_z), (0.0, 0.0, 0.0), self_id=instance_id)
+    if not check.hit:
+        return (
+            f"Created light '{name}' (instance_id={instance_id}) at ({pos_x}, {pos_y}, {pos_z}), "
+            f"type={light_type}. WARNING: it has Unity's default rotation (0,0,0) and currently "
+            "points at nothing in the scene. Use aim_light_at to point it at an existing object, "
+            "or set_object_transform to rotate it manually, before it has any visible effect."
+        )
+
     return f"Created light '{name}' (instance_id={instance_id}) at ({pos_x}, {pos_y}, {pos_z}), type={light_type}."
+
+
+@function_tool
+def aim_light_at(light_target: str, aim_at_target: str) -> str:
+    """Rotate a light (by instance_id) so it points directly at another
+    scene object (by instance_id, from the scene context you were given).
+    Use this after create_light, or on any existing light, when you know
+    WHICH object the light should illuminate — if no specific object makes
+    sense for the mood, pick the one you judge most central/relevant
+    yourself. Computes the rotation via Unity's own LookRotation (not
+    guessed), then applies it through the same guardrail as
+    set_object_transform."""
+    objects = list_scene_transforms()
+    light = next((o for o in objects if o.instance_id == light_target), None)
+    if light is None:
+        return f"Error: no object with instance_id {light_target} found in the scene."
+    aim_at = next((o for o in objects if o.instance_id == aim_at_target), None)
+    if aim_at is None:
+        return f"Error: no object with instance_id {aim_at_target} found in the scene."
+
+    rotation = compute_look_at_rotation(
+        light_position=(light.pos_x, light.pos_y, light.pos_z),
+        target_position=(aim_at.pos_x, aim_at.pos_y, aim_at.pos_z),
+    )
+    return _apply_transform_with_guardrail(light_target, position=None, rotation=rotation)
