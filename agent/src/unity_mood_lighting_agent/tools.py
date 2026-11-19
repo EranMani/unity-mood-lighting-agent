@@ -27,7 +27,13 @@ from unity_mood_lighting_agent.unity_bridge import (
 from unity_mood_lighting_agent.unity_bridge import set_light_properties as _set_light_properties
 from unity_mood_lighting_agent.unity_bridge import set_object_transform as _set_object_transform
 
-MAX_LIGHTS = 6  # per README v0 guardrail plan: "total light count stays under a cap"
+MAX_LIGHTS = 10  # per README v0 guardrail plan: "total light count stays under a cap"
+# Bumped from 6 live with Eran: the sci-fi thriller mood test hit the cap
+# and the agent explicitly said it wanted one more "lurking" light but
+# couldn't add it - 6 was too tight for a real, observed case (needed 7).
+# 10 gives real headroom above anything asked for so far while still being
+# a real bound, not "no cap" - the cap exists to stop runaway light spam,
+# not to block legitimate setups.
 
 
 def _merge_axis(current: float, new: float | None) -> float:
