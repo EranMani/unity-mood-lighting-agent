@@ -42,16 +42,16 @@ Real scene caught 2 things our hardcoded fake data got wrong: Cube's
 off-center position, Directional Light's real rotation. Also found
 `Global Volume` existed and wasn't in our fake data at all.
 
-## Write transform values — `gameobject set_transform` (not yet used)
+## Write transform values — `gameobject set_transform`
 ```bash
 unity command "gameobject set_transform" --target <handle> \
   --position '[x,y,z]' --rotation '[x,y,z]'
 ```
-Found, confirmed to exist, not yet called live.
+Confirmed to exist, now in heavy use (moves/rotates objects and lights).
 
 ## Open items
-`gameobject create` + `component add` (make lights), `capture screenshot`
-(v1 judge loop) — not yet tested.
+All originally-open items (`gameobject create`, `component add`, `capture
+screenshot`) are done and in use now — see below.
 
 ## instanceId is session-dynamic — always re-fetch, never hardcode
 `instance_id`/`instanceId` values (from `GetEntityId()` or `gameobject
@@ -63,3 +63,31 @@ and `gameobject find`'s `instanceId` ARE the same space, confirmed matching
 in the same session. Rule: always call `list_scene_transforms()` /
 `gameobject find` fresh within the current session before using an ID;
 never cache or hardcode one across runs.
+
+## `gameobject create`'s own JSON response truncates large instanceIds
+Found live: `gameobject create --name X` returned `instanceId: ...755000`
+in its JSON, but the object's REAL id (read via `script eval`'s
+`GetEntityId()`) was `...755038` — float precision loss somewhere in that
+command's own JSON encoding of a large integer. Using the truncated ID in
+any later command fails with "No loaded object with instanceId...", even
+though the object exists and `gameobject find --name X` locates it fine.
+Rule: never trust `gameobject create`'s own returned `instanceId` for a
+large number — create the GameObject via `script eval` instead (reads
+`GetEntityId()` directly, same precise path every other read in this
+project already uses) and use THAT id for all follow-up commands.
+
+## Colliders can live below the objects you're reading
+`list_scene_transforms()` originally read only root-level Transforms
+(`t.parent != null` skip). That's fine when a scene's real objects ARE
+its roots, but an imported Unity Asset Store pack may organize things as
+a handful of container roots (e.g. `Asset`, `Wall`) holding the real
+props as direct children — and the container itself can have ZERO
+colliders anywhere in its own hierarchy while its children are fully
+solid. `Physics.Raycast`/`RaycastAll` only hits actual `Collider`
+components wherever they sit; a parent with none is invisible to
+raycasting regardless of its children. Fixed by walking each root's
+subtree: no collider anywhere → return the root as-is (camera/light/
+volume unaffected); has a collider somewhere → return each direct child
+that owns one (one level below root, not collapsed to the absolute top,
+which would merge many distinct real objects into one meaningless
+point).
