@@ -24,8 +24,11 @@ from unity_mood_lighting_agent.unity_bridge import (
     get_light_properties,
     list_scene_transforms,
 )
+from unity_mood_lighting_agent.unity_bridge import set_color_adjustments as _set_color_adjustments
+from unity_mood_lighting_agent.unity_bridge import set_fog as _set_fog
 from unity_mood_lighting_agent.unity_bridge import set_light_properties as _set_light_properties
 from unity_mood_lighting_agent.unity_bridge import set_object_transform as _set_object_transform
+from unity_mood_lighting_agent.unity_bridge import set_vignette as _set_vignette
 
 MAX_LIGHTS = 10  # per README v0 guardrail plan: "total light count stays under a cap"
 # Bumped from 6 live with Eran: the sci-fi thriller mood test hit the cap
@@ -271,3 +274,94 @@ def create_light_near(
 
     _set_object_transform(target=instance_id, position=None, rotation=rotation)
     return f"Created light '{name}' (instance_id={instance_id}) at {light_position}, aimed at {aim_at_target}, type={light_type}."
+
+
+@function_tool
+def set_color_adjustments(
+    post_exposure: float | None = None,
+    contrast: float | None = None,
+    saturation: float | None = None,
+    color_filter_r: float | None = None,
+    color_filter_g: float | None = None,
+    color_filter_b: float | None = None,
+) -> str:
+    """Set the scene's overall color grading (Global Volume's
+    ColorAdjustments) — affects the WHOLE rendered image, not any single
+    light. post_exposure shifts overall brightness (0 = unchanged,
+    negative = darker). contrast and saturation are roughly -100 to 100
+    (negative saturation desaturates toward grayscale, useful for
+    horror/bleak moods; negative contrast flattens, positive punches up
+    separation between light/dark). color_filter tints everything (give
+    all 3 r/g/b together, each 0-1) — e.g. a cool blue filter for
+    horror/sci-fi, warm amber for cozy. Omit any field to leave it
+    unchanged."""
+    color_filter = None
+    if color_filter_r is not None or color_filter_g is not None or color_filter_b is not None:
+        if color_filter_r is None or color_filter_g is None or color_filter_b is None:
+            return "Error: give all three of color_filter_r, color_filter_g, color_filter_b together, not just some."
+        color_filter = (color_filter_r, color_filter_g, color_filter_b)
+
+    if contrast is not None and not (-100 <= contrast <= 100):
+        return f"Rejected: contrast {contrast} is out of range [-100, 100]."
+    if saturation is not None and not (-100 <= saturation <= 100):
+        return f"Rejected: saturation {saturation} is out of range [-100, 100]."
+
+    _set_color_adjustments(
+        post_exposure=post_exposure,
+        contrast=contrast,
+        saturation=saturation,
+        color_filter=color_filter,
+    )
+    return "Updated color grading (ColorAdjustments)."
+
+
+@function_tool
+def set_vignette(intensity: float, smoothness: float = 0.4) -> str:
+    """Set the scene's vignette (darkened frame edges, drawing the eye to
+    center) — a classic tension/horror/isolation tool. intensity is 0-1
+    (0 = off, 1 = very strong). smoothness controls how gradual the
+    falloff is (0 = hard edge, 1 = very soft). Adds the Vignette override
+    to the scene's Volume profile automatically if it isn't there yet."""
+    if not (0 <= intensity <= 1):
+        return f"Rejected: intensity {intensity} is out of range [0, 1]."
+    if not (0 <= smoothness <= 1):
+        return f"Rejected: smoothness {smoothness} is out of range [0, 1]."
+
+    _set_vignette(intensity=intensity, smoothness=smoothness)
+    return f"Updated vignette: intensity={intensity}, smoothness={smoothness}."
+
+
+@function_tool
+def set_fog(
+    enabled: bool | None = None,
+    color_r: float | None = None,
+    color_g: float | None = None,
+    color_b: float | None = None,
+    density: float | None = None,
+    start_distance: float | None = None,
+    end_distance: float | None = None,
+) -> str:
+    """Set the scene's fog (adds depth, obscures distant detail — useful
+    for mystery/isolation/dreamlike moods, or to hide a room's limited
+    size). color (give r/g/b together, each 0-1) tints the fog itself,
+    not the lights. density controls how thick it looks (this scene uses
+    Linear mode: start_distance/end_distance control where the fog begins
+    fading in and reaches full strength — smaller numbers = fog starts
+    closer to the camera). Omit any field to leave it unchanged."""
+    color = None
+    if color_r is not None or color_g is not None or color_b is not None:
+        if color_r is None or color_g is None or color_b is None:
+            return "Error: give all three of color_r, color_g, color_b together, not just some."
+        color = (color_r, color_g, color_b)
+
+    if density is not None and not (0 <= density <= 1):
+        return f"Rejected: density {density} is out of range [0, 1] (this is Linear-mode fog — small values like 0.01-0.1 are typical)."
+
+    _set_fog(
+        enabled=enabled,
+        color=color,
+        density=density,
+        start_distance=start_distance,
+        end_distance=end_distance,
+    )
+    return "Updated fog settings."

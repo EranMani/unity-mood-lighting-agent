@@ -18,6 +18,25 @@ machine, arcade cabinet, bed, shelving, projector).
 | 5 | Same thriller task, re-run after bumping `MAX_LIGHTS` 6→10 | 3/3 (gave up) | 4/10 | No | "The scene is cool-toned and dim, which helps a bit, but it reads more like a quiet retro game room than a tense sci-fi thriller. There's little real isolation, threat, or high-contrast drama, and nothing clearly suggests something lurking nearby." |
 | 6 | "warm golden hour sunlight mood" | 1/3 | 6/10 | **Yes** | "The scene has a warm amber palette that fits golden-hour-adjacent lighting, but it reads more like indoor retro ambient light than natural sunlight. No strong directional sun shafts, shadows, or exterior cues to really sell golden hour." |
 
+## v3: post-processing tools added (color grading, vignette, fog)
+
+Added `set_color_adjustments`, `set_vignette`, `set_fog` — scene-wide
+rendering levers beyond individual lights. Re-tested the two moods that
+failed lights-only:
+
+| # | Mood task | Attempts | Final score | Passed? | Judge notes (verbatim) |
+|---|---|---|---|---|---|
+| 7 | "cozy, warm, inviting mood" (post-processing tools available) | 1/3 | 6/10 | **Yes** (was 3/10 lights-only) | "The scene has a soft warm palette and some inviting elements, but it reads more like a sparse retro arcade/utility room than a cozy cafe or living room. The emptiness and lack of soft furnishings reduce the cozy feel." |
+| 8 | "tense sci-fi thriller mood" (post-processing tools available) | 3/3 (gave up) | 4-5/10 | No (same as lights-only) | "Cold blue palette and fog create some isolation, but the scene is very washed out and lacks strong contrast or a clear sense of lurking danger. It reads more like an obscured empty room than a tense sci-fi thriller." |
+
+**Real finding**: post-processing moved cozy cafe from fail (3/10) to
+pass (6/10) — color grading/vignette gave the agent levers lighting
+alone couldn't provide. Thriller mood still failed, same score range as
+before — its judge notes still point at content (clutter, menace,
+things that could be "lurking"), which post-processing can soften/frame
+but not create from nothing. Consistent with v5: post-processing extends
+what lighting-only could do, but doesn't remove the content ceiling.
+
 ## Score summary
 
 - **3 of 5 distinct moods passed** (horror, eerie abandoned lab, golden hour sunlight)
