@@ -37,14 +37,50 @@ things that could be "lurking"), which post-processing can soften/frame
 but not create from nothing. Consistent with v5: post-processing extends
 what lighting-only could do, but doesn't remove the content ceiling.
 
+## v3.1: scale-relative fog guardrail + scene-wide context + a real bug fix
+
+Eran caught (visually, from a screenshot) that the agent was stacking
+fog + vignette + negative exposure too aggressively, producing washed-
+out/flat results. Root cause #1 (fog specifically): `end_distance=35`
+set in a room whose real diagonal is ~22.8 — fog that never reaches
+full strength within the room reads as a flat haze, not depth. Fixed
+with `get_scene_bounds()` (computes real scene diagonal) + a `set_fog`
+guardrail rejecting distances that exceed it, plus a docstring
+explaining what the numbers mean in world-space terms.
+
+Root cause #2 (general over-stacking): `get_scene_context()` only
+exposed object transforms, never the CURRENT color grading/vignette/fog
+state — so the agent reasoned about each lever in isolation on every
+attempt, with no visibility into what was already pushing the scene
+darker/colder. Fixed by adding current post-processing values to the
+context string every attempt (not just on judge failure), with explicit
+"these effects stack" framing.
+
+While testing, also found and fixed a real, unrelated latent bug:
+`set_light_properties`/`get_light_properties`/`set_object_transform`
+passed the int instance_id straight into `subprocess.run`'s args list
+(which requires str), silently failing with "TypeError: expected str...
+not int" on any light whose ID reached these functions as a raw Python
+int rather than pre-stringified. Explains "2 point lights errored"
+appearing in every recent thriller-mood attempt.
+
+| # | Mood task | Attempts | Final score | Passed? | Judge notes (verbatim) |
+|---|---|---|---|---|---|
+| 9 | "tense sci-fi thriller mood" (fog guardrail + stacking-aware context + light-update bug fixed) | 3/3 | **7/10** | **Yes** | "The scene does feel cold, isolated, and sci-fi, with blue lighting and a sparse room. But it reads more like a quiet control room than a tense thriller; the contrast is fairly soft and there's little visible sign of danger or something lurking nearby." |
+
+**This is the first passing result for the thriller mood across the
+entire session** — went from failing every single attempt (lights-only
+AND first post-processing pass) to a clean pass once the agent could
+see its own cumulative state and couldn't set fog to nonsensical
+distances for the room's scale.
+
 ## Score summary
 
-- **3 of 5 distinct moods passed** (horror, eerie abandoned lab, golden hour sunlight)
-- **2 of 5 failed** (cozy cafe, sci-fi thriller) — both for the same
-  reason: not enough light-only levers to change, it's a content mismatch
-- Re-testing the thriller mood with a higher light cap (10 vs 6) did
-  **not** change the outcome (4/10 both times) — confirms light count was
-  never the real blocker for that mood
+- **5 of 6 distinct moods now pass** (horror, eerie abandoned lab,
+  golden hour sunlight, cozy cafe, sci-fi thriller)
+- Thriller mood needed BOTH the fog guardrail/context fix AND the
+  int-target bug fix to finally pass — can't fully separate which one
+  mattered more, both landed in the same commit before the passing run
 
 ## Conclusion
 
