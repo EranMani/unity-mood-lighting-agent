@@ -1,0 +1,12 @@
+[
+  {"name": "horror", "task": "apply a horror mood vibe to this scene - dark, ominous, cold, strong contrast"},
+  {"name": "eerie_lab", "task": "eerie abandoned sci-fi lab mood - quiet, unsettling, dim emergency lighting, sense of something wrong"},
+  {"name": "golden_hour", "task": "warm golden hour sunlight mood"},
+  {"name": "cozy_cafe", "task": "cozy, warm, inviting mood - like a cafe or living room"},
+  {"name": "thriller", "task": "tense sci-fi thriller mood - cold, isolated, high contrast, something lurking nearby"},
+  {"name": "dreamlike", "task": "dreamlike mood - soft, hazy, otherworldly, slightly surreal"},
+  {"name": "festive", "task": "festive holiday party mood - bright, colorful, celebratory, warm and cheerful"},
+  {"name": "post_apocalyptic", "task": "post-apocalyptic mood - desolate, grim, harsh, abandoned feeling"},
+  {"name": "zen", "task": "serene zen meditation mood - minimal, soft, balanced, tranquil"},
+  {"name": "noir", "task": "dramatic noir detective mood - stark shadows, moody, high contrast black and white feel"}
+]

@@ -41,9 +41,10 @@ MAX_ATTEMPTS = 3
 LOG_PATH = Path(__file__).resolve().parents[3] / "mood_test_log.jsonl"
 
 
-def _log_result(task: str, attempts_used: int, passed: bool, judgement) -> None:
+def _log_result(task: str, attempts_used: int, passed: bool, judgement, case_name: str | None = None) -> None:
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "case_name": case_name,  # None for ad-hoc main.py calls; set when run via eval.py
         "task": task,
         "attempts_used": attempts_used,
         "passed": passed,
@@ -56,7 +57,7 @@ def _log_result(task: str, attempts_used: int, passed: bool, judgement) -> None:
         f.write(json.dumps(entry) + "\n")
 
 
-async def run(task: str) -> str:
+async def run(task: str, case_name: str | None = None) -> str:
     deleted = cleanup_agent_lights()
     if deleted:
         print(f"[cleanup] removed {len(deleted)} light(s) from a previous run: {deleted}")
@@ -80,12 +81,12 @@ async def run(task: str) -> str:
         )
 
         if passed:
-            _log_result(task, attempt, True, judgement)
+            _log_result(task, attempt, True, judgement, case_name)
             return f"Success on attempt {attempt}: {judgement.notes}"
 
         feedback = judgement.notes
         if attempt == MAX_ATTEMPTS:
-            _log_result(task, attempt, False, judgement)
+            _log_result(task, attempt, False, judgement, case_name)
             return f"Gave up after {MAX_ATTEMPTS} attempts. Last judge score={judgement.mood_match_score}: {judgement.notes}"
 
     raise AssertionError("unreachable: loop always returns on its last iteration")
