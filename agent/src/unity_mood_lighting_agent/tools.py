@@ -44,6 +44,22 @@ def _merge_axis(current: float, new: float | None) -> float:
     return new if new is not None else current
 
 
+def _resolve_target(objects, target: str):
+    """Resolve `target` to its ObjectTransform — by instance_id (the
+    documented, expected form) or, failing that, by exact name match.
+    Guardrail for a real observed bug: the LLM occasionally sends an
+    object's human-readable name instead of its instance_id (e.g.
+    "Point Light (3)") even though it has the correct id in context —
+    schema/type checking can't catch this since a name is still a valid
+    string. This is input resolution, not a retry: whichever form the
+    model sends, we deterministically resolve it to the real id here,
+    once, before any tool proceeds."""
+    match = next((o for o in objects if o.instance_id == target), None)
+    if match is not None:
+        return match
+    return next((o for o in objects if o.name == target), None)
+
+
 def _apply_transform_with_guardrail(
     target: str,
     position: tuple[float, float, float] | None,
@@ -54,9 +70,10 @@ def _apply_transform_with_guardrail(
     always runs no matter which tool is calling it, instead of being
     re-implemented per tool and risking one copy missing it (exactly the
     bug create_light had before this refactor)."""
-    current = next((o for o in list_scene_transforms() if o.instance_id == target), None)
+    current = _resolve_target(list_scene_transforms(), target)
     if current is None:
-        return f"Error: no object with instance_id {target} found in the scene."
+        return f"Error: no object with instance_id or name '{target}' found in the scene."
+    target = current.instance_id
 
     position_for_check = position if position is not None else (current.pos_x, current.pos_y, current.pos_z)
     rotation_for_check = rotation if rotation is not None else (current.rot_x, current.rot_y, current.rot_z)
@@ -94,9 +111,10 @@ def set_object_transform(
     if not any_position and not any_rotation:
         return "Error: give at least one position or rotation axis to change."
 
-    current = next((o for o in list_scene_transforms() if o.instance_id == target), None)
+    current = _resolve_target(list_scene_transforms(), target)
     if current is None:
-        return f"Error: no object with instance_id {target} found in the scene."
+        return f"Error: no object with instance_id or name '{target}' found in the scene."
+    target = current.instance_id
 
     position = None
     if any_position:
@@ -136,6 +154,11 @@ def set_light_properties(
         if color_r is None or color_g is None or color_b is None:
             return "Error: give all three of color_r, color_g, color_b together, not just some."
         color = (color_r, color_g, color_b)
+
+    current = _resolve_target(list_scene_transforms(), target)
+    if current is None:
+        return f"Error: no object with instance_id or name '{target}' found in the scene."
+    target = current.instance_id
 
     # Guardrail (per README v0 plan: "intensity > 0 and below a sane max"):
     # a non-positive or absurd intensity is almost certainly a mistake, not
@@ -211,18 +234,18 @@ def aim_light_at(light_target: str, aim_at_target: str) -> str:
     guessed), then applies it through the same guardrail as
     set_object_transform."""
     objects = list_scene_transforms()
-    light = next((o for o in objects if o.instance_id == light_target), None)
+    light = _resolve_target(objects, light_target)
     if light is None:
-        return f"Error: no object with instance_id {light_target} found in the scene."
-    aim_at = next((o for o in objects if o.instance_id == aim_at_target), None)
+        return f"Error: no object with instance_id or name '{light_target}' found in the scene."
+    aim_at = _resolve_target(objects, aim_at_target)
     if aim_at is None:
-        return f"Error: no object with instance_id {aim_at_target} found in the scene."
+        return f"Error: no object with instance_id or name '{aim_at_target}' found in the scene."
 
     rotation = compute_look_at_rotation(
         light_position=(light.pos_x, light.pos_y, light.pos_z),
         target_position=(aim_at.pos_x, aim_at.pos_y, aim_at.pos_z),
     )
-    return _apply_transform_with_guardrail(light_target, position=None, rotation=rotation)
+    return _apply_transform_with_guardrail(light.instance_id, position=None, rotation=rotation)
 
 
 @function_tool
@@ -248,9 +271,9 @@ def create_light_near(
     if count_lights() >= MAX_LIGHTS:
         return f"Rejected: scene already has {MAX_LIGHTS} lights (the cap). Adjust existing lights instead of adding more."
 
-    aim_at = next((o for o in list_scene_transforms() if o.instance_id == aim_at_target), None)
+    aim_at = _resolve_target(list_scene_transforms(), aim_at_target)
     if aim_at is None:
-        return f"Error: no object with instance_id {aim_at_target} found in the scene."
+        return f"Error: no object with instance_id or name '{aim_at_target}' found in the scene."
 
     if offset_x == 0 and offset_y == 0 and offset_z == 0:
         return "Rejected: offset_x/y/z are all 0 — the light would be placed exactly at the target's position, giving no direction to aim toward."
