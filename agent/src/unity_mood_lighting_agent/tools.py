@@ -22,6 +22,7 @@ from unity_mood_lighting_agent.unity_bridge import (
     count_lights,
     create_light as _create_light,
     get_light_properties,
+    get_scene_bounds,
     list_scene_transforms,
 )
 from unity_mood_lighting_agent.unity_bridge import set_color_adjustments as _set_color_adjustments
@@ -344,10 +345,21 @@ def set_fog(
     """Set the scene's fog (adds depth, obscures distant detail — useful
     for mystery/isolation/dreamlike moods, or to hide a room's limited
     size). color (give r/g/b together, each 0-1) tints the fog itself,
-    not the lights. density controls how thick it looks (this scene uses
-    Linear mode: start_distance/end_distance control where the fog begins
-    fading in and reaches full strength — smaller numbers = fog starts
-    closer to the camera). Omit any field to leave it unchanged."""
+    not the lights. This scene uses Linear mode: start_distance is how
+    far from the camera fog BEGINS to appear (nothing before it is
+    foggy at all); end_distance is how far until fog reaches FULL
+    strength (everything beyond is maximally fogged). CRITICAL: these
+    are WORLD-SPACE DISTANCES, not arbitrary numbers — they only make
+    sense relative to the actual room's size. If end_distance is larger
+    than the room itself, nothing in view ever reaches full-strength fog
+    and nothing stays clear either — the whole scene reads as a flat,
+    washed-out haze instead of real depth (a bug Eran caught live). Good
+    fog needs a real gradient: start_distance should be well INSIDE the
+    room (so near objects stay clear), end_distance should be at or
+    before the room's far edge (so far objects actually look obscured).
+    This tool checks your values against the scene's real diagonal size
+    and rejects distances that are clearly too large for this room.
+    Omit any field to leave it unchanged."""
     color = None
     if color_r is not None or color_g is not None or color_b is not None:
         if color_r is None or color_g is None or color_b is None:
@@ -356,6 +368,21 @@ def set_fog(
 
     if density is not None and not (0 <= density <= 1):
         return f"Rejected: density {density} is out of range [0, 1] (this is Linear-mode fog — small values like 0.01-0.1 are typical)."
+
+    # Guardrail (real bug Eran caught live): fog start/end distances only
+    # mean anything relative to the room's actual scale. end_distance
+    # bigger than the room's own diagonal means the fog never reaches
+    # full strength anywhere visible — reads as flat haze, not depth.
+    if start_distance is not None or end_distance is not None:
+        bounds = get_scene_bounds()
+        if end_distance is not None and end_distance > bounds.diagonal:
+            return (
+                f"Rejected: end_distance {end_distance} exceeds the scene's actual diagonal size "
+                f"({bounds.diagonal:.1f}). Fog that never reaches full strength within the room reads "
+                "as a flat wash, not real depth. Pick end_distance at or below the room's scale."
+            )
+        if start_distance is not None and end_distance is not None and start_distance >= end_distance:
+            return f"Rejected: start_distance {start_distance} must be smaller than end_distance {end_distance}."
 
     _set_fog(
         enabled=enabled,

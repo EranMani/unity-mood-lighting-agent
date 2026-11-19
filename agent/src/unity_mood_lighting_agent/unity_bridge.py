@@ -701,3 +701,40 @@ def set_fog(
         text=True,
         check=True,
     )
+
+
+_GET_SCENE_BOUNDS_SCRIPT = """
+var min = new UnityEngine.Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+var max = new UnityEngine.Vector3(float.MinValue, float.MinValue, float.MinValue);
+foreach (var t in UnityEngine.Object.FindObjectsByType<UnityEngine.Transform>()) {
+  var p = t.position;
+  min = UnityEngine.Vector3.Min(min, p);
+  max = UnityEngine.Vector3.Max(max, p);
+}
+var size = max - min;
+return new { diagonal = size.magnitude };
+""".strip()
+
+
+class SceneBounds(BaseModel):
+    """Overall scene scale — used to sanity-check fog distances against
+    the room's actual size, not a generic/guessed number."""
+
+    diagonal: float = Field(description="Distance across the whole scene's bounding box, corner to corner.")
+
+
+def get_scene_bounds() -> SceneBounds:
+    """Compute the scene's overall diagonal size from every object's
+    position. Found live (Eran caught it): the agent set fog
+    end_distance=35 in a room whose real diagonal is ~22.8 — fog that
+    extends well past the room's far wall fogs almost everything visible
+    with no real near/far gradient, reading as a flat washed-out haze
+    instead of atmospheric depth. This is what set_fog's guardrail checks
+    distances against."""
+    result = subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", _GET_SCENE_BOUNDS_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return SceneBounds(**json.loads(result.stdout))
