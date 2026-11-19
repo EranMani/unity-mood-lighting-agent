@@ -11,17 +11,36 @@ move the scene toward that mood.
 
 ## Status: v0 in progress — build log below (see Scope for the target)
 
-**Resume here (next session):** v0's pipeline, the rotation/position
-guardrail, v1 judge, v2 retry loop, full light-property tools
-(intensity/color/color-temp/bounce), `create_light`/`create_light_near`,
-and `aim_light_at` are all built and verified live (steps 1-21). The real
-blocker is no longer tooling — it's that "horror mood" caps around
-4/10 even with correctly-aimed, correctly-colored lights, because the
-imported test room (Mess Hall demo) just doesn't photograph as horror no
-matter how the lights are set. **Next: either accept this scene's
-ceiling and move to a more horror-appropriate test scene, or treat 4/10
-as "good enough for v0/v1/v2 proven" and move on to v3 (post-processing,
-fog, skybox — real mood tools lights alone can't provide).**
+**Resume here (next session):** v3 post-processing (ColorAdjustments,
+Vignette, Fog) is built, guardrailed, and wired as real agent tools
+(steps 22-24 below). **5 of 6 distinct moods now pass** the judge
+(≥6/10): horror, eerie lab, golden hour, cozy cafe, sci-fi thriller.
+Two real, confirmed bugs found and fixed this session: fog distances
+not scaled to room size (washed-out scenes), and an int-vs-str
+TypeError silently failing light updates. A broader 5-mood stress test
+(dreamlike, festive, post-apocalyptic, zen, noir — only zen passed)
+surfaced two NEW open items, neither fixed yet:
+
+1. **"Unnamed point light" bug** — the agent reliably loses track of
+   the instance_id for the pack's original two generically-named lights
+   ("Point Light (3)"/"(4)") partway through a run, reporting it "can't
+   move them, no label-based reference." Root cause suspected (not yet
+   confirmed): these are the only lights in the scene the agent didn't
+   just create itself (so didn't just mint a fresh ID for), and they
+   lack a descriptive name like the agent's own creations do.
+2. **Diff-with-outcome tracking (parked idea, now has real evidence
+   for it)** — 2 of the 5 new mood tests (dreamlike, festive) had the
+   score *drop* across retry attempts, one more (post-apocalyptic) went
+   flat — i.e. the agent made it worse on later attempts, consistent
+   with having no visibility into "what I changed last time hurt."
+   `get_scene_context()` currently gives absolute state only (not
+   memory, re-read fresh every call — see docs/mood-test-results.md's
+   "Parked idea" section for the full trade-off discussion). Decision
+   was: don't build until there's real evidence; this test run IS that
+   evidence. **Next session: build diff tracking, and/or fix the
+   unnamed-point-light bug first since it may be partly confounding the
+   data** (an agent that can't reliably touch 2 of its lights is
+   handicapped independent of memory).
 
 ### LLM customization options
 See `docs/llm-customization-options.md` for the general-knowledge
@@ -71,6 +90,9 @@ the problem, add complexity only once that's proven, not before.
     - Deliberately a **separate** tool from `create_light`, not a parameter on it — Eran's call: needs to work on any existing light, not just newly created ones.
     - New `create_light_near(name, aim_at_target, offset_x, offset_y, offset_z, light_type)`: creates a light at `target_position + offset` and pre-aims it at the target in one atomic step, so it structurally cannot produce the "forgot to aim it" bug. `offset_x/y/z` are the agent's own judgment call (lighting role — key/fill/rim positioning), not hardcoded by code; code only does the deterministic math (offset-then-lookat order, verified live: offset must come before look-at, since looking at a point you're standing on gives an undefined/zero direction vector).
 21. **Deeper root cause found: aim targets could be colliderless root objects.** Testing `create_light_near` against the newly-imported Mess Hall sample scene (Unity Asset Store "FREE Low Poly Sci-Fi Mess Hall Environment Demo" — added to give the agent real geometry to work with, since the original test room was one plane + one cube) kept failing even with correct offset math — root cause: `list_scene_transforms()` only ever read root-level objects (`t.parent != null` skip, from step 6), and in this imported scene, container roots like `Wall` have **zero colliders anywhere in their own hierarchy** — only their individually-nested prop children do (`Asset/Cosmic_retro_mesa_bed_simple`, etc). Raycasting at a root's position was structurally unreliable, independent of any offset/rotation logic. Fixed the read script itself (not a new parallel function — Eran's call, one source of truth): for each root, if it/its subtree has no collider anywhere, return the root unchanged (camera/light/volume still visible, nothing regresses); if it does, return each **direct child that itself owns a collider** — one level below root, not collapsed to the absolute top (which would have merged 16 distinct real props into one meaningless point). **Verified live, several layers**: raw script showed 16 real distinct props, each correctly positioned, not one collapsed point; a direct test light aimed at a prop came back `hit=True` on the real intended object; a full agent run through the judge loop created 3 real lights, all confirmed `hit=True` against real geometry by direct post-run inspection, not narration.
+22. **v3: post-processing tools — `set_color_adjustments`, `set_vignette`, `set_fog`.** Live-tested the Global Volume on "Global Volume" GameObject first: `ColorAdjustments` already active with real tuned values from the imported pack; `Vignette` did NOT exist in the profile by default, had to be added via `profile.Add<Vignette>(true)` before setting it (confirmed visually — a screenshot showed real edge darkening after). All three go through `script eval` since Volume components use `profile.TryGet<T>(out t)` + `VolumeParameter<T>` wrappers (`.value`/`.overrideState`), not the plain `component get_fields`/`set_field` path that works for Light fields. Fog is separate from Volume entirely (`UnityEngine.RenderSettings`, a global scene setting), already enabled with real tuned values. Wired all 3 as agent tools with sanity guardrails (contrast/saturation range, vignette intensity/smoothness range, fog density range). **Real result**: cozy cafe mood flipped from failing (3/10, lights-only) to passing (6/10, attempt 1) — first measurable win directly attributable to post-processing. Sci-fi thriller mood stayed at 4-5/10, unchanged — judge notes still pointed at missing content/menace, consistent with the v5 content-ceiling finding, not a tooling gap.
+23. **Fog scale guardrail — Eran caught a real bug visually.** Agent-set fog `end_distance=35` in a room whose real diagonal is ~22.8 (confirmed via a new `get_scene_bounds()` function: walks every `Transform` in the scene, returns the bounding box's diagonal magnitude) — fog that never reaches full strength within the room reads as a flat, washed-out haze instead of real depth, confirmed by a screenshot matching the judge's own words ("very washed out... obscured empty room"). Fixed `set_fog`'s docstring to explain what start/end distance actually mean in world-space terms (relative to room scale, not generic numbers), plus a guardrail rejecting `end_distance` greater than the scene's real diagonal. **Verified live**: re-ran the thriller mood, agent picked sane values on its own this time (`end_distance=13.5`, under the 22.8 diagonal) — the guardrail never even had to reject anything, the docstring + computed-bounds context was enough.
+24. **Scene-wide post-processing state added to `get_scene_context()`; a real, separate bug found and fixed.** Eran's diagnosis (even after the fog fix, scores got worse): the agent was reasoning about each render lever (lights, exposure, vignette, fog) in isolation, each individually "reasonable for a tense mood," stacking several darkening/desaturating effects on top of each other into an unreadable, overly flat result — because `get_scene_context()` only ever exposed object transforms, never the CURRENT post-processing values, so the agent had no way to see it was already compounding. Fixed by adding current `ColorAdjustments`/`Vignette`/`Fog` values to the context string on **every** attempt (not just after a judge failure — attempt 1 needs this too, it starts blind otherwise), with explicit "these effects stack" framing. **Architectural clarification** (Eran asked): `get_scene_context()` is NOT memory — it's ground truth re-read fresh from Unity every call, with no history. The actual short-term memory in this pipeline is the judge's `notes` fed into `main.py`'s retry loop as feedback, the only thing that carries information forward from a past attempt. While testing this, also found a real, unrelated latent bug: `set_light_properties`/`get_light_properties`/`set_object_transform` passed the `int` instance_id straight into `subprocess.run`'s args list (which requires `str`), silently failing with `TypeError: expected str, bytes or os.PathLike object, not int` whenever `target` reached these functions as a bare Python int rather than pre-stringified upstream — explains "2 point lights errored" appearing in every recent thriller-mood attempt. Fixed by `str()`'ing `target` at all 3 call sites. **Verified live**: re-ran thriller mood clean with both fixes — **passed, 7/10, first time all session** (was failing every single attempt before, lights-only and first post-processing pass included). A follow-up 5-mood stress test (dreamlike, festive, post-apocalyptic, zen, noir) found the "unnamed point light" bug and surfaced real evidence for the parked diff-with-outcome idea — both recorded above in "Resume here" and in `docs/mood-test-results.md`, neither fixed yet.
 
 ### Unity LookRotation / parenting terminology (for anyone re-reading this)
 
@@ -199,9 +221,12 @@ shape as the Alvarmethod `learn-visual` skill) — never declare success without
 actually looking at the rendered result.
 
 **v3 — expand the action space.** Post-processing (bloom, color grading),
-fog, skybox — mood in a real engine is rarely lights alone. Also: reason from
-the gameplay camera's actual POV, not just generic top-down scene data, since
-horror staging is about what the player sees.
+fog, skybox — mood in a real engine is rarely lights alone. **Started and
+largely proven (2026-11-19 session, steps 22-24): ColorAdjustments,
+Vignette, Fog all built, guardrailed, and verified to move real mood
+scores.** Not yet done: bloom, chromatic aberration, HDRI skybox swap,
+reasoning from the gameplay camera's actual POV rather than generic
+scene data.
 
 **v4 — mood grounding rubric.** Translate mood words into concrete parameter
 ranges (intensity bands, color temperature ranges, contrast targets) instead
