@@ -137,3 +137,62 @@ notes for a real pattern — e.g. the agent visibly moving a value in a
 bad direction twice in a row, or running out of attempts while still
 clearly converging. If that pattern shows up, this is justified by
 evidence. If not, it's solved already or a different problem.
+
+## Eval harness built, full 10-case suite run twice (step 27)
+
+Built `eval_suite.json` (the 10 moods tested so far, as a canonical,
+re-runnable set) + `eval.py` (the harness — scaffolding OUTSIDE the
+agent that loops the suite, calls `main.py`'s `run()` per case, tags
+each result's `case_name` in `mood_test_log.jsonl`, prints a summary
+table). Scoped as single trial per case for v0, per discussion with
+Eran — real production evals often run multiple trials per case since
+LLM output isn't deterministic; that's the next addition if scores look
+inconsistent, not before.
+
+Ran the full suite twice, back to back, same scene, same code, nothing
+changed between runs — a direct test of how much a single trial's
+pass/fail can be trusted:
+
+| Case | Run 1 | Run 2 | Verdict |
+|---|---|---|---|
+| horror | 7 PASS | 7 PASS | solid pass |
+| golden_hour | 6 PASS | 7 PASS | solid pass |
+| zen | 6 PASS | 6 PASS | solid pass |
+| eerie_lab | 3 FAIL | 6 PASS | **borderline/noisy — flipped** |
+| noir | 6 PASS | 5 FAIL | **borderline/noisy — flipped** |
+| cozy_cafe | 2 FAIL | 2 FAIL | solid, consistent fail |
+| thriller | 2 FAIL | 3 FAIL | solid, consistent fail |
+| dreamlike | 2 FAIL | 3 FAIL | solid, consistent fail |
+| festive | 3 FAIL | 1 FAIL | solid, consistent fail |
+| post_apocalyptic | 4 FAIL | 1 FAIL | solid, consistent fail |
+
+Both runs landed at 4/10 overall, but *which* 4 passed differed —
+`eerie_lab` and `noir` crossed the pass/fail threshold (6) in opposite
+directions between runs with zero code/scene changes. That's real,
+measured LLM non-determinism, and it specifically matters at the
+threshold boundary — a single trial's pass/fail for a borderline case
+cannot be trusted; this is the concrete evidence the earlier "no
+evidence yet" multi-trial discussion was waiting for, scoped to
+borderline cases specifically.
+
+The other 5 failing moods did NOT flip — same ballpark score, same
+fail, both runs, no boundary-crossing drama. That consistency is itself
+the signal: this isn't noise, it's a real ceiling. All 5
+(cozy_cafe, thriller, dreamlike, festive, post_apocalyptic) need actual
+scene CONTENT (furniture, decorations, decay, open space) that a sci-fi
+mess-hall scene (vending machines, arcade cabinets, bunks) structurally
+doesn't have — lighting alone cannot manufacture "festive party" or
+"cozy cafe" out of a room full of retro arcade gear. This is exactly
+the v5 hypothesis from the original lights-only test series, now
+confirmed with a second, independent dataset rather than resting on
+the first one alone.
+
+**Conclusion**: the eval harness did its real job here — it separated
+"needs more trials before trusting the number" (eerie_lab, noir) from
+"needs a different scene/scope, not more lighting tools" (the other 5).
+Next real step for THIS scene's results: either (a) build multi-trial
+averaging for borderline cases specifically, or (b) treat the 5
+consistent fails as confirmation to actually scope v5 (scene/content
+transformation) rather than continuing to add more lighting/post-
+processing tools against a content ceiling that more lighting can't
+cross.
