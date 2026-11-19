@@ -468,3 +468,23 @@ def cleanup_agent_lights() -> list[str]:
             _delete_object(obj.instance_id)
             deleted.append(obj.name)
     return deleted
+
+
+def reset_post_processing() -> None:
+    """Reset ColorAdjustments/Vignette/Fog to a defined NEUTRAL baseline
+    before a new task starts — same bug class as light-stacking, caught
+    live by Eran: nothing was resetting post-processing between runs, so
+    one mood's leftover grading (e.g. noir's saturation=-100, contrast=70,
+    vignette=0.6) silently bled into the NEXT mood test, contaminating
+    its starting point and likely a real contributor to the eval suite's
+    run-to-run score inconsistency. NOTE: this is NOT the original
+    imported pack's values — those were already overwritten by this
+    session's many mood tests before anyone captured/recorded them, so
+    the true original is unrecoverable. This defines a clean, documented,
+    consistent baseline going forward instead: 0 exposure/contrast/
+    saturation, no color tint, no vignette, fog off. Deterministic,
+    code-orchestrated, same reasoning and call site as
+    cleanup_agent_lights() — called once at the top of main.py's run()."""
+    _set_color_adjustments(post_exposure=0.0, contrast=0.0, saturation=0.0, color_filter=(1.0, 1.0, 1.0))
+    _set_vignette(intensity=0.0, smoothness=0.4)
+    _set_fog(enabled=False, color=(1.0, 1.0, 1.0), density=0.0, start_distance=0.0, end_distance=100.0)

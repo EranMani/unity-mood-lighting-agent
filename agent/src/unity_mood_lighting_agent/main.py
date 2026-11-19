@@ -33,7 +33,7 @@ from dotenv import load_dotenv
 
 from unity_mood_lighting_agent.agent import agent, get_scene_context
 from unity_mood_lighting_agent.judge import judge_mood_match
-from unity_mood_lighting_agent.tools import cleanup_agent_lights
+from unity_mood_lighting_agent.tools import cleanup_agent_lights, reset_post_processing
 
 load_dotenv()
 
@@ -61,6 +61,8 @@ async def run(task: str, case_name: str | None = None) -> str:
     deleted = cleanup_agent_lights()
     if deleted:
         print(f"[cleanup] removed {len(deleted)} light(s) from a previous run: {deleted}")
+    reset_post_processing()
+    print("[cleanup] reset post-processing to neutral baseline")
 
     feedback = ""  # judge's notes from the previous failed attempt, if any
 
