@@ -209,6 +209,22 @@ of relying on the model's own training-data sense of "what horror lighting
 looks like." Makes the judge's scoring criteria explicit and reviewable
 instead of implicit.
 
+**v5 — scene/geometry transformation (bigger scope, parked, not started).**
+Found live (2026-11-19, testing "cozy cafe" and "abandoned outpost" moods
+against the Mess Hall test scene): lighting alone has a hard physical
+ceiling — it can shift atmosphere (warm/cold, bright/dim, high/low
+contrast) *within* what a scene's actual geometry supports, but it cannot
+turn a neon-arcade sci-fi room into a cafe, or a small clean room into a
+decayed abandoned outpost. That's a different kind of problem (what
+objects/materials exist, not how they're lit) and a materially bigger
+scope — swapping/adding props, changing materials/colors on geometry,
+possibly camera framing — not an extension of "an agent that controls
+lights." Deliberately NOT started: this is the same "don't solve a
+future architecture problem before the current one is validated" trap
+the whole project has avoided so far. See
+`docs/scene-transformation-roadmap.md` for the fuller discussion once
+it's time to actually scope this.
+
 ---
 
 ## Open questions / not yet decided
