@@ -105,3 +105,35 @@ lighting control, not a missing feature of the lighting agent. See
   children. See README build log steps 20-21 and the "Light" container
   bug (a root named "Light" had no Light component itself, only 2 Point
   Light children — fixed the same way).
+
+## Parked idea: diff-with-outcome tracking (not built, no evidence yet)
+
+Eran's question: right now `get_scene_context()` gives the agent
+absolute current state ("fog density is 0.02"), and the judge gives
+prose feedback ("too washed out"). Neither tells the agent WHAT CHANGED
+between attempts and WHAT EFFECT that change had on the score. A third
+layer — "you moved saturation from 7.8 to -12 last attempt, score went
+3→5" — would let it reason causally (did that help or hurt?) instead of
+re-deriving everything from scratch each attempt.
+
+**Trade-offs if built:**
+- Pro: could reduce wasted attempts, more useful the more attempts a
+  run has (currently capped at 3, so limited window to pay off)
+- Pro: natural fit if MAX_ATTEMPTS is ever raised
+- Con: real new state to maintain (every tool call's before/after value
+  + the score that followed), more moving parts
+- Con: grows the prompt every attempt — more tokens/cost in an already-
+  short 3-attempt loop
+- Con: risk of overfitting to this one scene's specific numbers rather
+  than reasoning about moods generally — could hurt transfer to a
+  different scene
+- Con: **no evidence yet that this is the actual bottleneck** — thriller
+  already passed on attempt 3/3 without it; building this now would be
+  solving a hypothesized problem, not an observed one
+
+**Decision**: don't build yet. Run 5+ more mood tests first (different
+moods, same scene), then check `mood_test_log.jsonl` + per-attempt judge
+notes for a real pattern — e.g. the agent visibly moving a value in a
+bad direction twice in a row, or running out of attempts while still
+clearly converging. If that pattern shows up, this is justified by
+evidence. If not, it's solved already or a different problem.
