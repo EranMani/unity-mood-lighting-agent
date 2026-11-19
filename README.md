@@ -13,21 +13,24 @@ move the scene toward that mood.
 
 **Resume here (next session):** v3 post-processing (ColorAdjustments,
 Vignette, Fog) is built and guardrailed. Step 26 fixed light-stacking
-across sessions (`delete_light` + auto `cleanup_agent_lights()`); step
-27 built a real eval harness (`eval_suite.json` + `eval.py`, 10 canonical
-mood cases) and ran it twice, back to back. **Result: 4/10 pass, and
-running it twice was the right call** — `eerie_lab`/`noir` flipped
-pass/fail between runs with zero code changes (real LLM non-determinism,
-matters at the threshold boundary), while 5 moods (cozy_cafe, thriller,
-dreamlike, festive, post_apocalyptic) failed hard and consistently both
-times — confirming the v5 hypothesis with a second dataset: this sci-fi
-mess-hall scene structurally lacks the CONTENT those moods need, and
-lighting alone cannot manufacture it. Full comparison table and
-reasoning in `docs/mood-test-results.md`'s "Eval harness" section.
-**Next real decision, not yet made:** build multi-trial averaging for
-borderline cases, or treat the 5 consistent fails as the trigger to
-actually scope v5 (scene/content transformation) instead of adding more
-lighting tools against a ceiling more lighting can't cross.
+across sessions; step 27 built a real eval harness (`eval_suite.json` +
+`eval.py`, 10 canonical mood cases) and ran it twice — 4/10 pass both
+times, `eerie_lab`/`noir` flipped pass/fail (real LLM non-determinism at
+the threshold), 5 moods failed hard both times (content ceiling). Step
+28 caught a SECOND real contamination bug (Eran's question): post-
+processing was never reset between runs either — the scene was caught
+sitting at noir's leftover grading with no mood task running. Fixed
+with `reset_post_processing()`, ran the suite a THIRD time. **Result:
+still 4/10 — the fix was real and necessary but wasn't the main
+bottleneck.** The 4 hardest fails (cozy_cafe, dreamlike, festive,
+post_apocalyptic) stayed exactly as stuck, ruling out contamination as
+their cause and strengthening the content-ceiling conclusion rather than
+explaining it away. Full tables and reasoning in
+`docs/mood-test-results.md`. **Next real decision:** multi-trial
+averaging would only help the 2 borderline cases now — the stronger
+case is to actually scope v5 (scene/content transformation), since
+two real orchestration bugs have now been ruled out as the explanation
+for the other 4 failures.
 
 **Parked for later:** diff-with-outcome tracking — 2 of the 5 new mood tests (dreamlike, festive) had the
    score *drop* across retry attempts, consistent with having no
@@ -95,6 +98,8 @@ the problem, add complexity only once that's proven, not before.
 26. **Light-stacking bug — fixed.** Diagnosed live: lights created across separate `main.py` runs had no identity marker and nothing ever deleted them, so they piled up indefinitely across sessions (found 8 legacy lights still sitting in the scene from before this fix). Eran set the ground rule: the agent may add/remove ONLY its own created lights, never the scene's originals — cleanly enforceable in code via a tag, not an agent-followed convention (this project already hit 2 "trust the LLM to follow an instruction exactly" bugs — step 13, step 25 — so anything that must be reliable goes through code). Built: `AGENT_LIGHT_PREFIX` ("AgentLight_") prepended unconditionally in `create_light`/`create_light_near`; `delete_object()` added to `unity_bridge.py` (confirmed live via `unity command --query delete` first — `gameobject delete`, just `--target`); new `delete_light` agent tool, rejects anything untagged; new `cleanup_agent_lights()` — a plain function, not an agent tool, same Code vs. agent split as `list_scene_transforms()`, since "clear what we added last time, every time" has exactly one correct answer — called once at the top of `main.py`'s `run()`. Considered and explicitly parked: persistent cross-session diff/history tracking, so the agent itself could reason about what to keep vs. remove — real future-roadmap scope (a later phase supporting one continuous ask → fix → ask-again session), not needed to solve today's actual problem, and each `main.py` call still being a fresh memoryless session is fine for now. One-time manual cleanup of the 8 pre-existing untagged legacy lights to restore a real baseline (21 original objects, confirmed). **Verified live, full loop**: a run that timed out mid-retry left 2 tagged lights behind; the next run's cleanup found and deleted both before starting, then completed normally (passed, 8/10, attempt 2).
 
 27. **Eval harness built; full 10-case suite run twice, back to back.** Distinguished "harness" from "tools" for Eran: tools are what the LLM calls (`set_object_transform`, etc); a harness is the scaffolding OUTSIDE the agent that drives it — the OpenAI Agents SDK's `Runner.run()` is the *agent* harness (loop, retries, tool-calling), `eval.py` is a separate, higher-level *eval* harness that doesn't talk to the LLM at all, only to `main.py`'s `run()`. Built `eval_suite.json` (the 10 moods tested so far, compiled into a canonical, re-runnable set) + `eval.py` (loops the suite, tags each result's `case_name` into `mood_test_log.jsonl`, prints a pass/fail summary). Scoped as single trial per case, per discussion with Eran — multi-trial averaging is the next addition only if scores look inconsistent, not before. **They did**: ran the full suite twice with zero code/scene changes between runs — `eerie_lab` and `noir` flipped pass/fail between runs (real, measured LLM non-determinism, specifically at the threshold boundary), while 5 other moods (cozy_cafe, thriller, dreamlike, festive, post_apocalyptic) failed hard and consistently both times, no flipping — confirming the v5 content-ceiling hypothesis with a second, independent dataset rather than resting on the first lights-only series alone. Full comparison table and reasoning in `docs/mood-test-results.md`'s "Eval harness" section. Both runs landed at 4/10 overall.
+
+28. **Post-processing contamination found and fixed; suite run a third time.** Eran's question: does cleanup also reset post-processing between runs? It didn't — checked live, confirmed `cleanup_agent_lights()` only ever touched lights. Checked the live scene with NO mood task running: it was sitting at `saturation=-100, contrast=70, vignette=0.6` — noir's leftover grading from the previous run, still active, proving the contamination was real, same bug class as light-stacking but for render state. Built `reset_post_processing()` (`tools.py`), called alongside `cleanup_agent_lights()` at the top of `main.py`'s `run()` — resets to a defined NEUTRAL baseline (0 exposure/contrast/saturation, no tint, vignette off, fog off), explicitly NOT the original imported pack's values (already overwritten by this session's many tests before anyone recorded them, unrecoverable). Verified live: read the contaminated state, reset, re-read, confirmed clean. **Ran the full suite a third time with the fix: still 4/10.** The fix was real and necessary, but NOT the main bottleneck — the 4 hardest-failing moods (cozy_cafe, dreamlike, festive, post_apocalyptic) stayed exactly as stuck, same score band, completely unmoved by removing this known contamination source. That's a useful negative result: it rules out contamination as their cause and strengthens the content-ceiling conclusion rather than explaining it away. Full 3-run comparison table in `docs/mood-test-results.md`'s step 28 section. With two real orchestration bugs now ruled out (light-stacking, post-processing contamination) as the explanation for the 4 hard fails, the stronger case is scoping v5 (scene/content transformation) next, not more multi-trial averaging (which would only help the 2 borderline cases).
 
 ### Unity LookRotation / parenting terminology (for anyone re-reading this)
 
@@ -249,7 +254,12 @@ and consistently both times, with no run-to-run variance — unlike the 2
 borderline cases that flipped pass/fail purely from LLM non-determinism.
 That consistency IS the signal: this is a real content ceiling, not noise,
 confirmed on a second, independent dataset rather than resting on the
-original lights-only series alone. That's a different kind of problem (what
+original lights-only series alone. **Strengthened again by step 28:**
+after fixing a real post-processing contamination bug and re-running the
+suite a third time, 4 of those same moods stayed exactly as stuck, same
+score band, completely unmoved — ruling out contamination as an
+alternative explanation and leaving the content ceiling as the only
+remaining one. That's a different kind of problem (what
 objects/materials exist, not how they're lit) and a materially bigger
 scope — swapping/adding props, changing materials/colors on geometry,
 possibly camera framing — not an extension of "an agent that controls

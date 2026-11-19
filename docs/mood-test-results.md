@@ -196,3 +196,74 @@ consistent fails as confirmation to actually scope v5 (scene/content
 transformation) rather than continuing to add more lighting/post-
 processing tools against a content ceiling that more lighting can't
 cross.
+
+## Post-processing contamination found and fixed; suite run a third time (step 28)
+
+**What we tried to resolve**: Eran asked whether `cleanup_agent_lights()`
+also resets post-processing between runs. It didn't — checked the live
+code, confirmed no reset logic existed for ColorAdjustments/Vignette/
+Fog at all. Checked the LIVE scene state with no mood task running: it
+was sitting at `saturation=-100, contrast=70, vignette=0.6` — noir's
+leftover grading from the end of run 2, still active. Proof the
+contamination was real, not hypothetical: every mood case in the suite
+was starting from whatever the PREVIOUS case left behind, not a clean
+slate, same bug class as the light-stacking issue but for render state
+instead of light objects.
+
+**What we tried**: built `reset_post_processing()` (`tools.py`), called
+once at the top of `main.py`'s `run()`, alongside `cleanup_agent_lights()`.
+Resets to a defined NEUTRAL baseline (0 exposure/contrast/saturation, no
+tint, vignette off, fog off) — explicitly NOT the original imported
+pack's values, which were already overwritten by this session's many
+mood tests before anyone recorded them; that original baseline is
+unrecoverable. This defines a clean, documented, consistent starting
+point going forward instead. Verified live before trusting it: read the
+contaminated state, called reset, re-read — confirmed clean neutral
+values across all three systems.
+
+**Result — ran the full suite a third time, with the fix in place:**
+
+| Case | Run 1 | Run 2 | Run 3 (with fix) |
+|---|---|---|---|
+| horror | 7 PASS | 7 PASS | 8 PASS |
+| golden_hour | 6 PASS | 7 PASS | 7 PASS |
+| zen | 6 PASS | 6 PASS | 6 PASS |
+| eerie_lab | 3 FAIL | 6 PASS | 6 PASS |
+| noir | 6 PASS | 5 FAIL | 5 FAIL |
+| cozy_cafe | 2 FAIL | 2 FAIL | 2 FAIL |
+| thriller | 2 FAIL | 3 FAIL | 4 FAIL |
+| dreamlike | 2 FAIL | 3 FAIL | 3 FAIL |
+| festive | 3 FAIL | 1 FAIL | 3 FAIL |
+| post_apocalyptic | 4 FAIL | 1 FAIL | 3 FAIL |
+
+**Conclusion, stated honestly**: the pass count did NOT change (4/10, all
+three runs). The fix was correct and necessary — contamination was real,
+proven live — but it was not the main driver of the low overall pass
+rate. Two things it DID show:
+
+1. The 4 hardest-failing moods (cozy_cafe, dreamlike, festive,
+   post_apocalyptic) stayed exactly as stuck as before, same low score
+   band, completely unmoved by removing a known source of cross-run
+   noise. This is a USEFUL negative result — it rules out contamination
+   as their cause and strengthens the content-ceiling conclusion rather
+   than weakening it: these moods aren't failing because of leftover
+   state, they're failing because the scene lacks the content they need.
+2. Already-passing moods trended slightly up (horror 7→7→8, golden_hour
+   6→7→7) — small, in the expected direction if the fix is doing
+   something real, though not a dramatic effect.
+
+One honest caveat, not overclaimed: `eerie_lab`/`noir` (the two
+run-to-run flippers) each have only ONE data point post-fix. They look
+stable now, but one run isn't enough to confirm the flip-flopping is
+actually resolved versus landing the same way by chance again — would
+need a 4th run to really know.
+
+**Where this leaves the two real open decisions from step 27**: option
+(a), multi-trial averaging, would still only help the 2 borderline
+cases — the 4 solid fails are now confirmed NOT to be a trial-count or
+contamination problem. Option (b), scoping v5 (scene/content
+transformation), looks like the higher-value next move: it's the only
+lever that could move 4 of the 6 currently-failing cases, and this
+session just spent two real fixes (light-stacking, post-processing
+contamination) ruling out the two most likely "it's just orchestration
+noise" explanations for them.
