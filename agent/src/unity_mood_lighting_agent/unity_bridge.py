@@ -501,3 +501,203 @@ def compute_look_at_rotation(
     )
     raw = json.loads(result.stdout)
     return (raw["rot_x"], raw["rot_y"], raw["rot_z"])
+
+
+# --- v3: post-processing (Volume) + fog ---------------------------------
+#
+# Volume components (ColorAdjustments, Vignette, Bloom, etc.) are NOT
+# plain serialized fields readable via `component get_fields` the way
+# Light fields are — confirmed live: `component get_fields --component
+# UnityEngine.Rendering.Volume` resolves to the wrong thing. They live
+# inside a VolumeProfile asset, accessed via `profile.TryGet<T>(out t)`,
+# and each parameter is a VolumeParameter<T> wrapper (`.value`,
+# `.overrideState`). So these go through script eval, same as everything
+# else that doesn't fit the component get_fields/set_field shape.
+#
+# Found live: this project's "Global Volume" object already has
+# ColorAdjustments active with real tuned values from the imported pack.
+# Vignette did NOT exist in the profile and had to be added via
+# `profile.Add<Vignette>(true)` before it could be set — confirmed this
+# live, visually (screenshot showed real edge darkening after setting it).
+
+_GET_COLOR_ADJUSTMENTS_SCRIPT = """
+var go = UnityEngine.GameObject.Find("Global Volume");
+var vol = go.GetComponent<UnityEngine.Rendering.Volume>();
+UnityEngine.Rendering.Universal.ColorAdjustments ca;
+vol.profile.TryGet(out ca);
+return new { post_exposure = ca.postExposure.value, contrast = ca.contrast.value, saturation = ca.saturation.value, color_filter_r = ca.colorFilter.value.r, color_filter_g = ca.colorFilter.value.g, color_filter_b = ca.colorFilter.value.b };
+""".strip()
+
+
+class ColorAdjustments(BaseModel):
+    """Global Volume's ColorAdjustments override — grading for the whole scene."""
+
+    post_exposure: float = Field(description="Exposure offset in EV, 0 = unchanged.")
+    contrast: float = Field(description="-100 to 100.")
+    saturation: float = Field(description="-100 to 100, -100 = grayscale.")
+    color_filter_r: float = Field(description="Tint color, 0-1.")
+    color_filter_g: float
+    color_filter_b: float
+
+
+def get_color_adjustments() -> ColorAdjustments:
+    """Read the Global Volume's current ColorAdjustments values."""
+    result = subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", _GET_COLOR_ADJUSTMENTS_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return ColorAdjustments(**json.loads(result.stdout))
+
+
+def set_color_adjustments(
+    post_exposure: float | None = None,
+    contrast: float | None = None,
+    saturation: float | None = None,
+    color_filter: tuple[float, float, float] | None = None,
+) -> None:
+    """Set any subset of the Global Volume's ColorAdjustments. Omit a field
+    to leave it unchanged."""
+    assignments = []
+    if post_exposure is not None:
+        assignments.append(f"ca.postExposure.overrideState = true; ca.postExposure.value = {post_exposure}f;")
+    if contrast is not None:
+        assignments.append(f"ca.contrast.overrideState = true; ca.contrast.value = {contrast}f;")
+    if saturation is not None:
+        assignments.append(f"ca.saturation.overrideState = true; ca.saturation.value = {saturation}f;")
+    if color_filter is not None:
+        assignments.append(
+            f"ca.colorFilter.overrideState = true; ca.colorFilter.value = new UnityEngine.Color({color_filter[0]}f, {color_filter[1]}f, {color_filter[2]}f, 1f);"
+        )
+    if not assignments:
+        return
+    script = (
+        'var go = UnityEngine.GameObject.Find("Global Volume");\n'
+        "var vol = go.GetComponent<UnityEngine.Rendering.Volume>();\n"
+        "UnityEngine.Rendering.Universal.ColorAdjustments ca;\n"
+        "vol.profile.TryGet(out ca);\n"
+        + "\n".join(assignments)
+        + "\nreturn new { ok = true };"
+    )
+    subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+_GET_VIGNETTE_SCRIPT = """
+var go = UnityEngine.GameObject.Find("Global Volume");
+var vol = go.GetComponent<UnityEngine.Rendering.Volume>();
+UnityEngine.Rendering.Universal.Vignette vig;
+bool exists = vol.profile.TryGet(out vig);
+if (!exists) return new { exists = false, intensity = 0f, smoothness = 0f };
+return new { exists = true, intensity = vig.intensity.value, smoothness = vig.smoothness.value };
+""".strip()
+
+
+class VignetteState(BaseModel):
+    exists: bool = Field(description="False if Vignette has never been added to the profile.")
+    intensity: float = Field(description="0-1, 0 = no vignette.")
+    smoothness: float = Field(description="0-1, how gradual the falloff is.")
+
+
+def get_vignette() -> VignetteState:
+    """Read the Global Volume's current Vignette state. exists=False means
+    it hasn't been added to the profile yet (set_vignette adds it)."""
+    result = subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", _GET_VIGNETTE_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return VignetteState(**json.loads(result.stdout))
+
+
+def set_vignette(intensity: float, smoothness: float = 0.4) -> None:
+    """Set the Global Volume's Vignette intensity/smoothness, adding the
+    override to the profile first if it isn't there yet (confirmed live:
+    it wasn't present in this project's imported profile by default)."""
+    script = f"""
+var go = UnityEngine.GameObject.Find("Global Volume");
+var vol = go.GetComponent<UnityEngine.Rendering.Volume>();
+UnityEngine.Rendering.Universal.Vignette vig;
+bool exists = vol.profile.TryGet(out vig);
+if (!exists) vig = vol.profile.Add<UnityEngine.Rendering.Universal.Vignette>(true);
+vig.intensity.overrideState = true;
+vig.intensity.value = {intensity}f;
+vig.smoothness.overrideState = true;
+vig.smoothness.value = {smoothness}f;
+return new {{ ok = true }};
+""".strip()
+    subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+_GET_FOG_SCRIPT = """
+return new { enabled = UnityEngine.RenderSettings.fog, color_r = UnityEngine.RenderSettings.fogColor.r, color_g = UnityEngine.RenderSettings.fogColor.g, color_b = UnityEngine.RenderSettings.fogColor.b, mode = UnityEngine.RenderSettings.fogMode.ToString(), density = UnityEngine.RenderSettings.fogDensity, start_distance = UnityEngine.RenderSettings.fogStartDistance, end_distance = UnityEngine.RenderSettings.fogEndDistance };
+""".strip()
+
+
+class FogState(BaseModel):
+    enabled: bool
+    color_r: float
+    color_g: float
+    color_b: float
+    mode: str = Field(description="Linear, Exponential, or ExponentialSquared.")
+    density: float = Field(description="Used by Exponential/ExponentialSquared modes.")
+    start_distance: float = Field(description="Used by Linear mode.")
+    end_distance: float = Field(description="Used by Linear mode.")
+
+
+def get_fog() -> FogState:
+    """Read the scene's current RenderSettings fog state (separate from
+    the Volume profile — fog is a global scene render setting)."""
+    result = subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", _GET_FOG_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return FogState(**json.loads(result.stdout))
+
+
+def set_fog(
+    enabled: bool | None = None,
+    color: tuple[float, float, float] | None = None,
+    density: float | None = None,
+    start_distance: float | None = None,
+    end_distance: float | None = None,
+) -> None:
+    """Set any subset of the scene's fog settings. Omit a field to leave
+    it unchanged. Mode is left as whatever it already is (this project's
+    scene is already Linear) — changing modes isn't exposed here, not
+    needed for the v3 scope."""
+    assignments = []
+    if enabled is not None:
+        assignments.append(f"UnityEngine.RenderSettings.fog = {'true' if enabled else 'false'};")
+    if color is not None:
+        assignments.append(
+            f"UnityEngine.RenderSettings.fogColor = new UnityEngine.Color({color[0]}f, {color[1]}f, {color[2]}f, 1f);"
+        )
+    if density is not None:
+        assignments.append(f"UnityEngine.RenderSettings.fogDensity = {density}f;")
+    if start_distance is not None:
+        assignments.append(f"UnityEngine.RenderSettings.fogStartDistance = {start_distance}f;")
+    if end_distance is not None:
+        assignments.append(f"UnityEngine.RenderSettings.fogEndDistance = {end_distance}f;")
+    if not assignments:
+        return
+    script = "\n".join(assignments) + "\nreturn new { ok = true };"
+    subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
