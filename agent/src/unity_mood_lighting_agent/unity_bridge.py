@@ -34,10 +34,20 @@ PROJECT_PATH = r"D:\AI\MyProjects\unity-mood-lighting-agent\MoodLightingScene"
 #     absolute top, since collapsing a whole prop-container (e.g. "Asset"
 #     holding 16 distinct props) to one point would throw away real,
 #     individually meaningful objects.
-#   - If a root has NO collider anywhere in its subtree (Main Camera,
-#     Global Volume, a Light with no collider), emit the root itself
-#     unchanged — so non-collidable objects the agent still needs to see/
-#     move (lights, camera) don't silently disappear from scene context.
+#   - Second rule, same shape, for Light components specifically (found
+#     live: a root named "Light" had NO Light component itself, just 2
+#     Point Light children — set_light_properties failed on it with
+#     "GameObject 'Light' has no component of type 'Light'" because the
+#     first rule's "no collider anywhere -> keep root as-is" fallback
+#     doesn't know about Light components at all). If a root has no
+#     collider anywhere AND no Light component on itself AND has at least
+#     one child WITH a Light component, emit those Light-bearing children
+#     instead of the container — same principle as the collider rule,
+#     just for a different component type.
+#   - Otherwise (no collider anywhere, no Light anywhere in children
+#     either — Main Camera, Global Volume): emit the root itself
+#     unchanged, so non-collidable/non-light objects the agent still
+#     needs to see/move don't silently disappear from scene context.
 _READ_SCRIPT = """
 System.Collections.Generic.IEnumerable<UnityEngine.Transform> AllDescendants(UnityEngine.Transform t) {
   foreach (UnityEngine.Transform child in t) {
@@ -59,11 +69,20 @@ object Entry(UnityEngine.Transform t) {
 var list = new System.Collections.Generic.List<object>();
 foreach (var t in UnityEngine.Object.FindObjectsByType<UnityEngine.Transform>()) {
   if (t.parent != null) continue;
-  if (!HasColliderAnywhere(t)) { list.Add(Entry(t)); continue; }
-  if (t.gameObject.GetComponent<UnityEngine.Collider>() != null) { list.Add(Entry(t)); continue; }
-  foreach (UnityEngine.Transform child in t) {
-    if (child.gameObject.GetComponent<UnityEngine.Collider>() != null) list.Add(Entry(child));
+  if (HasColliderAnywhere(t)) {
+    if (t.gameObject.GetComponent<UnityEngine.Collider>() != null) { list.Add(Entry(t)); continue; }
+    foreach (UnityEngine.Transform child in t) {
+      if (child.gameObject.GetComponent<UnityEngine.Collider>() != null) list.Add(Entry(child));
+    }
+    continue;
   }
+  if (t.gameObject.GetComponent<UnityEngine.Light>() != null) { list.Add(Entry(t)); continue; }
+  bool anyChildIsLight = false;
+  foreach (UnityEngine.Transform child in t) {
+    if (child.gameObject.GetComponent<UnityEngine.Light>() != null) { list.Add(Entry(child)); anyChildIsLight = true; }
+  }
+  if (anyChildIsLight) continue;
+  list.Add(Entry(t));
 }
 return list;
 """.strip()
