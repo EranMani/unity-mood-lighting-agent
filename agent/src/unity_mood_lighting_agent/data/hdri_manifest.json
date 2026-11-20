@@ -1,0 +1,159 @@
+[
+  {
+    "id": "noon_grass",
+    "filename": "noon_grass_1k.hdr",
+    "display_name": "Noon Grass",
+    "environment": "outdoor",
+    "time_of_day": "midday",
+    "weather": "clear",
+    "light_type": "natural",
+    "contrast": "high",
+    "sky_view": "open",
+    "category": "Fields & Countryside/Grassland & Meadows/Open Fields & Meadows",
+    "tags": [
+      "tree",
+      "sun",
+      "grass"
+    ],
+    "description": "Free 16K unclipped HDRI: bright midday sun over an open grassy field with deep blue sky, strong natural light, high-contrast shadows and a warm, neutral outdoor mood."
+  },
+  {
+    "id": "kloppenheim_06_puresky",
+    "filename": "kloppenheim_06_puresky_1k.hdr",
+    "display_name": "Kloppenheim 06 (Pure Sky)",
+    "environment": "outdoor",
+    "time_of_day": "sunset",
+    "weather": "partly_cloudy",
+    "light_type": "natural",
+    "contrast": "low",
+    "sky_view": "open",
+    "category": "Pure Skies",
+    "tags": [
+      "pure skies"
+    ],
+    "description": "Free 24K unclipped HDRI. Soft, low-contrast sunrise with warm sun rays breaking through scattered clouds, cool blue ambient light."
+  },
+  {
+    "id": "satara_night",
+    "filename": "satara_night_1k.hdr",
+    "display_name": "Satara Night",
+    "environment": "outdoor",
+    "time_of_day": "night",
+    "weather": "clear",
+    "light_type": "mixed",
+    "contrast": "high",
+    "sky_view": "open",
+    "category": "Fields & Countryside/Grassland & Meadows/Savanna & Bushveld",
+    "tags": [
+      "stars",
+      "tree",
+      "lamp",
+      "milky way",
+      "galaxy",
+      "hut"
+    ],
+    "description": "Free 16K unclipped HDRI: clear, starry night with the Milky Way and bright village lamps, high-contrast warm highlights and silhouetted trees and huts."
+  },
+  {
+    "id": "overcast_soil_puresky",
+    "filename": "overcast_soil_puresky_1k.hdr",
+    "display_name": "Overcast Soil (Pure Sky)",
+    "environment": "outdoor",
+    "time_of_day": "afternoon",
+    "weather": "overcast",
+    "light_type": "natural",
+    "contrast": "low",
+    "sky_view": "open",
+    "category": "Pure Skies",
+    "tags": [
+      "pure skies"
+    ],
+    "description": "Free 16K unclipped HDRI: soft, low-contrast overcast sky with diffused natural morning/afternoon light and a subtle warm horizon glow, calm moody lighting."
+  },
+  {
+    "id": "shanghai_bund",
+    "filename": "shanghai_bund_1k.hdr",
+    "display_name": "Shanghai Bund",
+    "environment": "outdoor",
+    "time_of_day": "night",
+    "weather": "partly_cloudy",
+    "light_type": "artificial",
+    "contrast": "high",
+    "sky_view": "open",
+    "category": "Coast & Water/Harbours & Piers/Promenades & Seafronts",
+    "tags": [
+      "skyscraper",
+      "skyline",
+      "china",
+      "neon",
+      "promenade",
+      "building",
+      "architecture",
+      "street",
+      "city",
+      "square",
+      "balcony",
+      "shanghai"
+    ],
+    "description": "Free 16K HDRI (unclipped) capturing Shanghai Bund at night: high-contrast neon skyline, warm promenade lighting, partly cloudy sky and vivid river reflections."
+  },
+  {
+    "id": "fireplace",
+    "filename": "fireplace_1k.hdr",
+    "display_name": "Fireplace",
+    "environment": "indoor",
+    "time_of_day": null,
+    "weather": null,
+    "light_type": "artificial",
+    "contrast": "high",
+    "sky_view": null,
+    "category": "Interiors/Residential/Living Rooms & Lounges",
+    "tags": [
+      "fire",
+      "couch",
+      "room",
+      "lounge"
+    ],
+    "description": "Free, unclipped 16K HDRI of a warm, high-contrast lounge at night with strong fireplace glow, amber artificial lighting, deep shadows and a cozy, intimate mood."
+  },
+  {
+    "id": "studio_small_08",
+    "filename": "studio_small_08_1k.hdr",
+    "display_name": "Studio Small 08",
+    "environment": "indoor",
+    "time_of_day": null,
+    "weather": null,
+    "light_type": "artificial",
+    "contrast": "low",
+    "sky_view": null,
+    "category": "Studio/Photo Studios/Softbox & Lamp Setups",
+    "tags": [
+      "umbrella",
+      "softbox",
+      "infinity",
+      "lamp",
+      "studio",
+      "photo"
+    ],
+    "description": "Free 16K HDRI, unclipped, soft, low-contrast indoor studio lighting with large softboxes and octabox highlights, neutral tone and even wraparound illumination."
+  },
+  {
+    "id": "je_gray_02",
+    "filename": "je_gray_02_1k.hdr",
+    "display_name": "J&E Gray 02",
+    "environment": "outdoor",
+    "time_of_day": "afternoon",
+    "weather": "clear",
+    "light_type": "natural",
+    "contrast": "high",
+    "sky_view": "obstructed",
+    "category": "Forest & Woodland/Forest/Coniferous Forest",
+    "tags": [
+      "forest",
+      "grass",
+      "pine",
+      "sun"
+    ],
+    "description": "Free 24K unclipped HDRI of a sunlit pine forest with long morning shadows, bright sun flare and high-contrast natural light across grassy terrain."
+  }
+]

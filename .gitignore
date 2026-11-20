@@ -21,6 +21,8 @@ agent/.venv/
 [Ll]ogs/
 [Mm]emoryCaptures/
 [Uu]serSettings/
+# Unity Editor crash/auto-recovery snapshots, not real project content
+_Recovery/
 *.csproj
 *.sln
 *.pidb

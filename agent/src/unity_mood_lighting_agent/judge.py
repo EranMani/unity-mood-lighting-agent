@@ -11,12 +11,10 @@ agent's job is ONLY to produce the score; deciding what counts as a pass is
 this module's job (judge_mood_match()), not the agent's.
 """
 
-import base64
-
 from agents import Agent, Runner
 from pydantic import BaseModel, Field
 
-from unity_mood_lighting_agent.unity_bridge import capture_game_view
+from unity_mood_lighting_agent.unity_bridge import capture_game_view, image_to_data_url
 
 PASS_THRESHOLD = 6  # out of 10 — plain code decides this, not the LLM
 
@@ -45,9 +43,7 @@ judge_agent = Agent(
 
 
 def _image_to_data_url(path: str) -> str:
-    with open(path, "rb") as f:
-        encoded = base64.b64encode(f.read()).decode("utf-8")
-    return f"data:image/png;base64,{encoded}"
+    return image_to_data_url(path)
 
 
 async def judge_mood_match(mood_task: str) -> tuple[bool, MoodJudgement]:

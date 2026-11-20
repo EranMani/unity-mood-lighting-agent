@@ -62,7 +62,7 @@ def print_summary(case_names: list[str]) -> None:
     print(f"\n{passed_count}/{len(case_names)} passed")
 
 
-async def run_suite(only: list[str] | None = None) -> None:
+async def run_suite(only: list[str] | None = None, scene_path: str | None = None) -> None:
     suite = _load_suite()
     if only:
         suite = [c for c in suite if c["name"] in only]
@@ -72,12 +72,17 @@ async def run_suite(only: list[str] | None = None) -> None:
 
     for case in suite:
         print(f"\n=== Running case: {case['name']} ===")
-        output = await run(case["task"], case_name=case["name"])
+        output = await run(case["task"], case_name=case["name"], scene_path=scene_path)
         print(output)
 
     print_summary([c["name"] for c in suite])
 
 
 if __name__ == "__main__":
-    only_names = sys.argv[1:] or None
-    asyncio.run(run_suite(only_names))
+    args = sys.argv[1:]
+    scene_arg = None
+    if args and args[0] == "--scene":
+        scene_arg = args[1]
+        args = args[2:]
+    only_names = args or None
+    asyncio.run(run_suite(only_names, scene_path=scene_arg))

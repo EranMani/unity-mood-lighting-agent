@@ -10,12 +10,23 @@ name or ID has no ambiguity. See learning_steps/step5 for why that split
 (code vs agent) was made.
 """
 
+import base64
 import json
 import os
 import subprocess
 import tempfile
 
 from pydantic import BaseModel, Field
+
+
+def image_to_data_url(path: str) -> str:
+    """Base64-encode a PNG into a data URL for the Agents SDK's
+    input_image content block. Shared by judge.py (scoring) and main.py
+    (giving the lighting agent itself a visual starting point, not just
+    numeric scene context) — same encoding, two different callers."""
+    with open(path, "rb") as f:
+        encoded = base64.b64encode(f.read()).decode("utf-8")
+    return f"data:image/png;base64,{encoded}"
 
 UNITY_EXE = r"C:\Users\eranm\AppData\Local\Unity\bin\unity.exe"
 PROJECT_PATH = r"D:\AI\MyProjects\unity-mood-lighting-agent\MoodLightingScene"
@@ -536,10 +547,12 @@ def compute_look_at_rotation(
 # live, visually (screenshot showed real edge darkening after setting it).
 
 _GET_COLOR_ADJUSTMENTS_SCRIPT = """
-var go = UnityEngine.GameObject.Find("Global Volume");
-var vol = go.GetComponent<UnityEngine.Rendering.Volume>();
+UnityEngine.Rendering.Volume vol = null;
+foreach (var v in UnityEngine.Object.FindObjectsByType<UnityEngine.Rendering.Volume>(UnityEngine.FindObjectsSortMode.None)) { if (v.isGlobal) { vol = v; break; } }
+if (vol == null) return new { post_exposure = 0f, contrast = 0f, saturation = 0f, color_filter_r = 1f, color_filter_g = 1f, color_filter_b = 1f };
 UnityEngine.Rendering.Universal.ColorAdjustments ca;
-vol.profile.TryGet(out ca);
+bool exists = vol.profile.TryGet(out ca);
+if (!exists) return new { post_exposure = 0f, contrast = 0f, saturation = 0f, color_filter_r = 1f, color_filter_g = 1f, color_filter_b = 1f };
 return new { post_exposure = ca.postExposure.value, contrast = ca.contrast.value, saturation = ca.saturation.value, color_filter_r = ca.colorFilter.value.r, color_filter_g = ca.colorFilter.value.g, color_filter_b = ca.colorFilter.value.b };
 """.strip()
 
@@ -588,10 +601,12 @@ def set_color_adjustments(
     if not assignments:
         return
     script = (
-        'var go = UnityEngine.GameObject.Find("Global Volume");\n'
-        "var vol = go.GetComponent<UnityEngine.Rendering.Volume>();\n"
+        "UnityEngine.Rendering.Volume vol = null;\n"
+        "foreach (var v in UnityEngine.Object.FindObjectsByType<UnityEngine.Rendering.Volume>(UnityEngine.FindObjectsSortMode.None)) { if (v.isGlobal) { vol = v; break; } }\n"
+        "if (vol == null) return new { ok = false, error = \"No global Volume found in the active scene.\" };\n"
         "UnityEngine.Rendering.Universal.ColorAdjustments ca;\n"
-        "vol.profile.TryGet(out ca);\n"
+        "bool exists = vol.profile.TryGet(out ca);\n"
+        "if (!exists) ca = vol.profile.Add<UnityEngine.Rendering.Universal.ColorAdjustments>(true);\n"
         + "\n".join(assignments)
         + "\nreturn new { ok = true };"
     )
@@ -604,8 +619,9 @@ def set_color_adjustments(
 
 
 _GET_VIGNETTE_SCRIPT = """
-var go = UnityEngine.GameObject.Find("Global Volume");
-var vol = go.GetComponent<UnityEngine.Rendering.Volume>();
+UnityEngine.Rendering.Volume vol = null;
+foreach (var v in UnityEngine.Object.FindObjectsByType<UnityEngine.Rendering.Volume>(UnityEngine.FindObjectsSortMode.None)) { if (v.isGlobal) { vol = v; break; } }
+if (vol == null) return new { exists = false, intensity = 0f, smoothness = 0f };
 UnityEngine.Rendering.Universal.Vignette vig;
 bool exists = vol.profile.TryGet(out vig);
 if (!exists) return new { exists = false, intensity = 0f, smoothness = 0f };
@@ -636,8 +652,9 @@ def set_vignette(intensity: float, smoothness: float = 0.4) -> None:
     override to the profile first if it isn't there yet (confirmed live:
     it wasn't present in this project's imported profile by default)."""
     script = f"""
-var go = UnityEngine.GameObject.Find("Global Volume");
-var vol = go.GetComponent<UnityEngine.Rendering.Volume>();
+UnityEngine.Rendering.Volume vol = null;
+foreach (var v in UnityEngine.Object.FindObjectsByType<UnityEngine.Rendering.Volume>(UnityEngine.FindObjectsSortMode.None)) {{ if (v.isGlobal) {{ vol = v; break; }} }}
+if (vol == null) return new {{ ok = false, error = "No global Volume found in the active scene." }};
 UnityEngine.Rendering.Universal.Vignette vig;
 bool exists = vol.profile.TryGet(out vig);
 if (!exists) vig = vol.profile.Add<UnityEngine.Rendering.Universal.Vignette>(true);
@@ -753,3 +770,157 @@ def get_scene_bounds() -> SceneBounds:
         check=True,
     )
     return SceneBounds(**json.loads(result.stdout))
+
+
+# --- Skybox (HDRI) -----------------------------------------------------
+#
+# HDRI assets live in MoodLightingScene/Assets/HDRIs/ (sourced from
+# polyhaven.com, CC0). The manifest below is plain local metadata, NOT a
+# live Unity read — listing what's available has no ambiguity (same
+# Code vs. agent rule as list_scene_transforms), so this never touches
+# Unity at all. Only the import below fsync's against Unity when it
+# actually sets a skybox.
+
+_HDRI_MANIFEST_PATH = os.path.join(os.path.dirname(__file__), "data", "hdri_manifest.json")
+
+
+class SkyboxOption(BaseModel):
+    """One available HDRI skybox, with the metadata the agent reasons over
+    to pick a mood-appropriate one. Sourced from polyhaven.com's own
+    attribute tagging, not hand-written — their categorization is already
+    exactly what a mood decision needs (environment, time of day, weather,
+    light type, contrast)."""
+
+    id: str = Field(description="Stable identifier, pass this to set_skybox().")
+    filename: str = Field(description="The .hdr file in Assets/HDRIs/.")
+    display_name: str
+    environment: str | None = Field(default=None, description="'indoor' or 'outdoor'.")
+    time_of_day: str | None = None
+    weather: str | None = None
+    light_type: str | None = Field(default=None, description="'natural', 'artificial', or 'mixed'.")
+    contrast: str | None = Field(default=None, description="'low', 'medium', or 'high'.")
+    sky_view: str | None = Field(default=None, description="'open' or 'obstructed' — whether open sky is actually visible.")
+    tags: list[str] = Field(default_factory=list)
+    description: str | None = None
+
+
+def list_available_skyboxes() -> list[SkyboxOption]:
+    """Read the local HDRI manifest (no Unity call — pure local data,
+    deterministic). Use this to decide IF a skybox swap fits the mood and
+    scene (indoor scene with no visible sky may see little effect) and
+    WHICH one, before calling set_skybox()."""
+    with open(_HDRI_MANIFEST_PATH, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    return [SkyboxOption(**entry) for entry in raw]
+
+
+def set_skybox(skybox_id: str, exposure: float = 1.0, rotation: float = 0.0) -> str:
+    """Swap the scene's skybox to one of the HDRIs listed by
+    list_available_skyboxes(), by id. exposure (default 1.0, Unity's own
+    neutral default) scales overall sky brightness; rotation (0-360
+    degrees) spins the HDRI around the vertical axis, useful for moving
+    a sun/bright spot out of a bad position. Uses Unity's built-in
+    Skybox/Panoramic shader (pipeline-agnostic — URP's DrawSkyboxPass
+    just renders whatever RenderSettings.skybox points at, confirmed
+    live against this project's URP shader property list: _MainTex,
+    _Mapping, _ImageType, _Exposure, _Rotation, _Tint). Mapping is fixed
+    to Latitude-Longitude (equirectangular) since that's the format every
+    polyhaven.com HDRI download uses — confirmed live, not guessed.
+    Creates one real .mat asset per skybox under Assets/HDRIs/Materials/
+    (reused on repeat calls, not recreated). Calls
+    DynamicGI.UpdateEnvironment() so ambient light/reflections pick up
+    the change immediately, not just the visible dome."""
+    options = {opt.id: opt for opt in list_available_skyboxes()}
+    if skybox_id not in options:
+        valid = ", ".join(sorted(options))
+        return f"Error: unknown skybox_id '{skybox_id}'. Valid ids: {valid}"
+    filename = options[skybox_id].filename
+
+    script = f"""
+var texPath = "Assets/HDRIs/{filename}";
+var tex = UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.Texture>(texPath);
+if (tex == null) return new {{ ok = false, error = "HDRI texture not found at " + texPath }};
+
+string matDir = "Assets/HDRIs/Materials";
+if (!UnityEditor.AssetDatabase.IsValidFolder(matDir)) {{
+    UnityEditor.AssetDatabase.CreateFolder("Assets/HDRIs", "Materials");
+}}
+string matPath = matDir + "/{skybox_id}.mat";
+var mat = UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.Material>(matPath);
+if (mat == null) {{
+    var shader = UnityEngine.Shader.Find("Skybox/Panoramic");
+    mat = new UnityEngine.Material(shader);
+    UnityEditor.AssetDatabase.CreateAsset(mat, matPath);
+}}
+mat.SetTexture("_MainTex", tex);
+mat.SetFloat("_Mapping", 1f);
+mat.SetFloat("_ImageType", 0f);
+mat.SetFloat("_Exposure", {exposure}f);
+mat.SetFloat("_Rotation", {rotation}f);
+mat.SetColor("_Tint", new UnityEngine.Color(0.5f, 0.5f, 0.5f, 0.5f));
+UnityEditor.EditorUtility.SetDirty(mat);
+UnityEngine.RenderSettings.skybox = mat;
+UnityEngine.DynamicGI.UpdateEnvironment();
+UnityEditor.AssetDatabase.SaveAssets();
+return new {{ ok = true, material_path = matPath }};
+""".strip()
+
+    result = subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    data = json.loads(result.stdout)
+    if not data.get("ok"):
+        return f"Error: {data.get('error', 'unknown failure setting skybox')}"
+    return f"Skybox set to '{skybox_id}' ({options[skybox_id].display_name}), exposure={exposure}, rotation={rotation}."
+
+
+# --- Scene selection ----------------------------------------------------
+#
+# Multiple real test scenes now exist (TestRoom, the Mess Hall sci-fi
+# interior, the Forest outdoor demo) — nothing in the pipeline tracked or
+# controlled WHICH one was active, so main.py silently ran a task against
+# whatever happened to be open (found live, Eran caught it: an outdoor
+# forest test case actually ran against TestRoom after a manual switch).
+# "Is the right scene loaded" has exactly one correct answer, same Code
+# vs. agent rule as everything else here — deterministic, not the LLM's
+# job.
+
+_GET_ACTIVE_SCENE_SCRIPT = """
+var s = UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene();
+return new { name = s.name, path = s.path };
+""".strip()
+
+
+class ActiveScene(BaseModel):
+    name: str
+    path: str = Field(description="Project-relative path, e.g. 'Assets/Scenes/TestRoom.unity'.")
+
+
+def get_active_scene() -> ActiveScene:
+    """Read which scene is CURRENTLY open in the Editor. Deterministic,
+    no ambiguity — just a live read, same as list_scene_transforms()."""
+    result = subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", _GET_ACTIVE_SCENE_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return ActiveScene(**json.loads(result.stdout))
+
+
+def open_scene(scene_path: str) -> None:
+    """Force-load the given scene by project-relative path (e.g.
+    'Assets/Scenes/TestRoom.unity'), discarding unsaved changes to
+    whatever's currently open. Called by main.py's run() BEFORE any
+    cleanup/agent work, only when get_active_scene() doesn't already
+    match — never silently assumed."""
+    script = f'UnityEditor.SceneManagement.EditorSceneManager.OpenScene("{scene_path}"); return new {{ ok = true }};'
+    subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
