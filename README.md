@@ -11,26 +11,44 @@ move the scene toward that mood.
 
 ## Status: v0 in progress — build log below (see Scope for the target)
 
-**Resume here (next session):** v3 post-processing (ColorAdjustments,
-Vignette, Fog) is built and guardrailed. Step 26 fixed light-stacking
+**Business scope decision (2026-11-20, locked in with Eran, supersedes
+v5 below):** the product is lights + rendering features ONLY (lights,
+post-processing, skybox/HDRI, exposure, gamma) — geometry/content
+changes are explicitly OUT of scope, not a later phase. This means
+v5 (scene/geometry transformation) is **dropped**, not parked — the 4
+"content ceiling" eval fails that motivated it aren't bugs to fix under
+this product definition, they're requests the product was never meant
+to handle. See step 34 below: this also means the eval suite's old
+10-cases-on-one-scene setup under-counted real capability — scene
+choice turned out to matter as much as the mood-word itself.
+
+**Resume here (next session):** multi-scene support just landed (step
+32) and immediately found two real bugs (step 33) plus a genuine
+surprise in the eval numbers (step 34): `dreamlike` flipped FAIL→PASS
+and `thriller` flipped PASS→FAIL purely from changing which scene ran
+the test. **Next real decision, in order:** (1) scene readiness/
+bootstrap check — verify a scene's Lighting Mode isn't Baked-only
+(silently breaks the whole "instant mood change" premise), auto-create
+a Global Volume if missing, ensure at least one light exists before the
+agent starts; (2) split `eval_suite.json` into indoor (Mess Hall) vs
+outdoor (Forest) cases, drop TestRoom (bare plane+cube, no atmosphere,
+not a useful mood test) from eval scope entirely; (3) re-run and get a
+real baseline pass rate now that scene-to-mood matching is correct.
+
+**Previously (through step 28):** v3 post-processing (ColorAdjustments,
+Vignette, Fog) built and guardrailed. Step 26 fixed light-stacking
 across sessions; step 27 built a real eval harness (`eval_suite.json` +
 `eval.py`, 10 canonical mood cases) and ran it twice — 4/10 pass both
 times, `eerie_lab`/`noir` flipped pass/fail (real LLM non-determinism at
-the threshold), 5 moods failed hard both times (content ceiling). Step
-28 caught a SECOND real contamination bug (Eran's question): post-
-processing was never reset between runs either — the scene was caught
-sitting at noir's leftover grading with no mood task running. Fixed
-with `reset_post_processing()`, ran the suite a THIRD time. **Result:
-still 4/10 — the fix was real and necessary but wasn't the main
-bottleneck.** The 4 hardest fails (cozy_cafe, dreamlike, festive,
-post_apocalyptic) stayed exactly as stuck, ruling out contamination as
-their cause and strengthening the content-ceiling conclusion rather than
-explaining it away. Full tables and reasoning in
-`docs/mood-test-results.md`. **Next real decision:** multi-trial
-averaging would only help the 2 borderline cases now — the stronger
-case is to actually scope v5 (scene/content transformation), since
-two real orchestration bugs have now been ruled out as the explanation
-for the other 4 failures.
+the threshold), 5 moods failed hard both times (content ceiling at the
+time). Step 28 caught a SECOND real contamination bug (Eran's
+question): post-processing was never reset between runs either — the
+scene was caught sitting at noir's leftover grading with no mood task
+running. Fixed with `reset_post_processing()`, ran the suite a THIRD
+time — still 4/10, confirming the fix was real but not the main
+bottleneck at the time (see step 34 for how that conclusion changed
+once scene choice entered the picture). Full tables and reasoning in
+`docs/mood-test-results.md`.
 
 **Parked for later:** diff-with-outcome tracking — 2 of the 5 new mood tests (dreamlike, festive) had the
    score *drop* across retry attempts, consistent with having no
@@ -269,6 +287,133 @@ the whole project has avoided so far. See
 `docs/scene-transformation-roadmap.md` for the fuller discussion once
 it's time to actually scope this.
 
+**v6 — scene readiness / rendering configuration check (next up, scoped
+2026-11-20).** Found live/discussed with Eran: the pipeline has only
+ever assumed a scene already has working lighting infrastructure. Real
+edge cases that break that assumption, in priority order:
+- **Lighting Mode (Baked vs Realtime vs Mixed) — the one that actually
+  matters.** Unity scenes commonly default to Baked GI, where light
+  changes are invisible until a lightmap bake re-runs (seconds to
+  hours). If a scene is Baked-only, our pipeline can change every light
+  correctly and NOTHING will visually update — that's not a quality
+  gap, it directly breaks the product's core "change the mood quickly
+  from one prompt" promise. Needs a check + auto-fix (force
+  Realtime/Mixed) before any mood task runs on a new scene.
+- **Global Volume missing entirely** (not just missing components on
+  it, step 33 fixed that case) — `set_color_adjustments`/`set_vignette`
+  currently fail silently if no Volume GameObject exists at all. Needs
+  auto-create (GameObject + VolumeProfile) so mood control works on any
+  scene regardless of whether its original author set one up.
+- **Zero lights in the scene** — an artist may place only geometry with
+  no lights at all; the agent has nothing to adjust in that case, needs
+  a baseline light created first, same spirit as auto-creating the
+  Volume.
+- **Light count as context** — `count_lights()` already exists (from
+  the step 26 light-stacking fix) but isn't surfaced into
+  `get_scene_context()` yet; the agent should see what already exists
+  before deciding what to add.
+
+Deliberately deferred past v6, these affect visual *quality* (realistic
+reflections/GI on dynamic objects), not whether the product works at
+all, and some (auto-placing a correctly-bounded Reflection Probe) are
+real standalone features, not quick add-ons:
+- Reflection Probes, Light Probes, Adaptive Probe Volumes (URP's newer
+  auto-placed alternative to manual Light Probe groups)
+- Static emissive materials as GI light sources
+- 2D Lights — a URP 2D-renderer feature; this project is 3D, almost
+  certainly out of scope entirely unless that changes
+
+**SUPERSEDED 2026-11-20 — see the Business scope decision at the top of
+this doc.** Scoping out loud with Eran what the product is actually
+*for* (lights + rendering only, change an existing scene's mood from
+one prompt, never touch geometry) turned this from "parked, maybe
+later" into "not the product, full stop." The 4 content-ceiling fails
+this section documents aren't a gap to close, they're evidence the
+product boundary is in the right place.
+
+29. **Skybox/HDRI control — `list_available_skyboxes()` + `set_skybox()`.**
+    Downloaded 8 CC0 HDRIs from polyhaven.com (not hand-tagged — their own
+    API already classifies environment/time_of_day/weather/contrast/
+    sky_view, exactly what a mood decision needs), built
+    `hdri_manifest.json` from that real metadata. Shader property names
+    (`_MainTex`, `_Mapping`, `_Exposure`, `_Rotation`, `_Tint`,
+    `_ImageType`) confirmed live via reflection against the running
+    Editor, not guessed, before writing any code. `set_skybox()` creates/
+    reuses one real `.mat` asset per skybox under `Assets/HDRIs/Materials/`,
+    assigns `RenderSettings.skybox`, calls `DynamicGI.UpdateEnvironment()`.
+    **Verified live, both directions:** ran it against the enclosed Mess
+    Hall scene (correctly produced zero visible sky change — no
+    windows/opening, exactly the risk flagged before building this) and
+    against a real outdoor scene (step 32) where a day→night HDRI swap
+    was dramatically, visibly correct. One real finding from this test:
+    swapping the skybox does NOT touch the scene's directional light —
+    for a full night mood the agent needs to coordinate both, not either
+    alone (feeds into the future mood-grounding work, v4).
+
+30. **Lighting agent given vision — closes a gap open since the original
+    v0 tool list.** Only the judge agent (step 16) ever saw a screenshot;
+    the lighting agent making the actual mood decisions only ever got
+    `get_scene_context()`'s text. Now `main.py` captures the live game
+    view every attempt (same `input_image` pattern already proven in
+    `judge.py`) and passes it alongside scene-context text, re-captured
+    each retry for the same reason `get_scene_context()` re-reads fresh
+    each time. Eran's framing: this isn't just for deciding whether a
+    skybox is worth swapping — numeric transforms were always a weak
+    signal for where shadows fall or how a space already reads, seeing
+    it directly should improve every mood decision, not one.
+
+31. **Outdoor test scene — "Ultimate Nature – Starter" (free Asset Store
+    pack, Innerverse Interactive).** Picked over a competing free pack
+    specifically because its stated Unity version (6000.5.3) matched this
+    project's (6000.5.7f1) almost exactly, confirmed live after import:
+    clean URP shaders, no pink/broken materials. Real screenshots pulled
+    from the store listing and inspected directly (not just trusted the
+    description) before picking it. Caught a real account-vs-Editor
+    mismatch during download: Unity's web "Add to My Assets" and the
+    Editor's Package Manager "My Assets" tab can be signed into different
+    Unity IDs — Package Manager showing empty isn't a bug, it's usually
+    the wrong account.
+
+32. **Multi-scene pipeline — `get_active_scene()`/`open_scene()`.** Found
+    live, caught by Eran: nothing in the pipeline tracked or controlled
+    which scene was active, so an outdoor-forest test case actually ran
+    silently against the wrong scene after a manual Editor switch, and
+    was only caught because the mood score result looked wrong. Fixed by
+    making scene identity explicit end to end: `main.py run()` and
+    `eval.py` both take `--scene <path>`, check `get_active_scene()`
+    against it, and force-load via `open_scene()` on mismatch — all
+    deterministic code, no LLM judgment involved (same Code vs. agent
+    rule as everything else here, "is the right scene loaded" has exactly
+    one correct answer).
+
+33. **Two real bugs found immediately by testing against new scenes.**
+    First: `set_color_adjustments`/`get_color_adjustments` threw a raw
+    `NullReferenceException` on any scene whose Volume profile didn't
+    already have a ColorAdjustments override (true for the plain
+    `TestRoom` scene, never true for the Mess Hall this was originally
+    built against) — fixed with the same "add if missing" pattern
+    `set_vignette` already used. Second, a deeper one: every Volume
+    lookup was hardcoded to `GameObject.Find("Global Volume")` by NAME —
+    broke outright on the Forest pack, whose Volume object is actually
+    named `UNS_Global_Volume`, nested under a different root. Fixed
+    properly, not patched around: find the Volume by its `isGlobal`
+    component instead of by name (`FindObjectsByType<Volume>` + filter),
+    works regardless of what any given scene/pack happens to call it.
+
+34. **Eval suite run against the Forest scene: 5/10, but the real signal
+    is which cases flipped.** `dreamlike` (one of the original 4
+    content-ceiling fails) went FAIL→PASS (8/10) outdoors. `thriller`
+    (previously passing 7/10 on Mess Hall) went PASS→FAIL (4/10)
+    outdoors. Real, direct evidence the old content-ceiling conclusion
+    (steps 27-28) was partly an artifact of testing every mood against
+    one mismatched interior scene, not a universal limit of lights-only
+    control — while `cozy_cafe`/`festive`/`post_apocalyptic` stayed stuck
+    regardless of scene, confirming those specific ones really do need
+    geometry no scene swap can fake. Decided with Eran: `eval_suite.json`
+    needs a per-case scene assignment (indoor cases → Mess Hall, outdoor
+    → Forest), and `TestRoom` (bare plane+cube, no atmosphere to work
+    with) is dropped from eval scope entirely, not useful as a mood test.
+
 ---
 
 ## Open questions / not yet decided
@@ -305,11 +450,18 @@ for building v1 next, not just a theoretical nice-to-have.
 README.md                      architecture, build log, decisions
 docs/                           design notes (Unity CLI findings, etc.)
 MoodLightingScene/               the Unity project (URP, 6000.5.7f1)
+  Assets/Scenes/TestRoom.unity    original plain test scene (dropped from eval scope, step 34)
+  Assets/room/...MessHall...      indoor sci-fi test scene
+  Assets/InnerverseInteractive/   outdoor Forest test scene (free Asset Store pack)
+  Assets/HDRIs/                   8 CC0 skybox HDRIs (polyhaven.com) + generated .mat per skybox
 agent/
   src/unity_mood_lighting_agent/
-    unity_bridge.py              current: ObjectTransform, list_scene_transforms(), set_object_transform()
-    tools.py                     the agent's one tool (wraps unity_bridge)
+    unity_bridge.py              current: scene transforms, lights, post-processing, skybox, scene selection
+    tools.py                     the agent's tools (wraps unity_bridge)
     agent.py                     the Agent + get_scene_context()
-    main.py                      entry point: uv run python main.py "task"
+    judge.py                     separate scoring agent (visual judge)
+    main.py                      entry point: uv run python main.py "task" [--scene <path>]
+    eval.py                      eval harness: uv run python eval.py [--scene <path>] [case names]
+    data/hdri_manifest.json      skybox metadata (sourced from polyhaven.com's own tags)
     learning_steps/              steps 1-7, kept as the historical build record
 ```
