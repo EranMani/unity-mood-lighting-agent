@@ -924,3 +924,247 @@ def open_scene(scene_path: str) -> None:
         text=True,
         check=True,
     )
+
+
+# --- Scene readiness / baseline (v6, see README) -------------------------
+#
+# Two real problems, both found live testing against new scenes:
+# (1) a scene's rendering config can silently break the whole "instant
+#     mood change" promise (Baked lights/probes won't visually update
+#     until a rebake — see docs/unity-lighting-rendering-concepts.md),
+# (2) nothing ever stored a scene's TRUE original values before mutating
+#     it, so reset_post_processing() could only reset to an invented
+#     neutral baseline, not what the scene actually started as (the
+#     Forest pack's real artist-tuned grading is already gone — lesson
+#     learned, not repeating it for every future scene).
+#
+# capture_scene_baseline() MUST run (and only capture once per scene,
+# never overwrite) before ensure_scene_ready() touches anything.
+
+_BASELINE_DIR = os.path.join(os.path.dirname(__file__), "data", "scene_baselines")
+
+_CAPTURE_BASELINE_SCRIPT = """
+var lights = UnityEngine.Object.FindObjectsByType<UnityEngine.Light>(UnityEngine.FindObjectsSortMode.None);
+var lightInfo = new System.Collections.Generic.List<object>();
+foreach (var l in lights) {
+    lightInfo.Add(new {
+        instance_id = l.gameObject.GetEntityId().ToString(),
+        name = l.gameObject.name,
+        mode = l.lightmapBakeType.ToString(),
+        type = l.type.ToString(),
+        intensity = l.intensity,
+        color_r = l.color.r, color_g = l.color.g, color_b = l.color.b,
+        range = l.range
+    });
+}
+var probes = UnityEngine.Object.FindObjectsByType<UnityEngine.ReflectionProbe>(UnityEngine.FindObjectsSortMode.None);
+var probeInfo = new System.Collections.Generic.List<object>();
+foreach (var p in probes) {
+    probeInfo.Add(new { instance_id = p.gameObject.GetEntityId().ToString(), name = p.gameObject.name, mode = p.mode.ToString() });
+}
+string skyboxPath = UnityEngine.RenderSettings.skybox != null ? UnityEditor.AssetDatabase.GetAssetPath(UnityEngine.RenderSettings.skybox) : null;
+var ls = UnityEditor.Lightmapping.lightingSettings;
+return new {
+    lights = lightInfo,
+    reflection_probes = probeInfo,
+    skybox_material_path = skyboxPath,
+    realtime_gi = ls != null ? ls.realtimeGI : false,
+    baked_gi = ls != null ? ls.bakedGI : false
+};
+""".strip()
+
+
+def _baseline_path_for_scene(scene_path: str) -> str:
+    safe_name = "".join(c if c.isalnum() else "_" for c in scene_path)
+    return os.path.join(_BASELINE_DIR, f"{safe_name}.json")
+
+
+def capture_scene_baseline(scene_path: str | None = None) -> dict:
+    """Snapshot the CURRENT scene's real original state (light modes +
+    properties, reflection probe modes, skybox material, GI settings) to
+    a JSON file keyed by scene path — ONLY if no baseline exists yet for
+    this scene. Never overwrites an existing baseline (the whole point
+    is capturing truth before anything touches it; capturing again later
+    would just save already-mutated state as if it were original, the
+    exact mistake that already happened once to the Forest scene's real
+    artist-tuned values). Also captures ColorAdjustments/Vignette/Fog
+    via the existing get_* functions, same post-processing data
+    reset_post_processing() already knows how to re-apply."""
+    if scene_path is None:
+        scene_path = get_active_scene().path
+    path = _baseline_path_for_scene(scene_path)
+    if os.path.exists(path):
+        return {"status": "already_captured", "path": path}
+
+    result = subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", _CAPTURE_BASELINE_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    data = json.loads(result.stdout)
+    data["scene_path"] = scene_path
+    color = get_color_adjustments()
+    vignette = get_vignette()
+    fog = get_fog()
+    data["color_adjustments"] = color.model_dump()
+    data["vignette"] = vignette.model_dump()
+    data["fog"] = fog.model_dump()
+
+    os.makedirs(_BASELINE_DIR, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    return {"status": "captured", "path": path, "light_count": len(data["lights"]), "probe_count": len(data["reflection_probes"])}
+
+
+_ENSURE_READY_SCRIPT = """
+var report = new System.Collections.Generic.Dictionary<string, object>();
+
+// 1. Global Volume — find by component (isGlobal), create if missing entirely.
+UnityEngine.Rendering.Volume vol = null;
+foreach (var v in UnityEngine.Object.FindObjectsByType<UnityEngine.Rendering.Volume>(UnityEngine.FindObjectsSortMode.None)) { if (v.isGlobal) { vol = v; break; } }
+bool volumeCreated = false;
+if (vol == null) {
+    var go = new UnityEngine.GameObject("Global Volume");
+    vol = go.AddComponent<UnityEngine.Rendering.Volume>();
+    vol.isGlobal = true;
+    var profile = UnityEngine.ScriptableObject.CreateInstance<UnityEngine.Rendering.VolumeProfile>();
+    string dir = "Assets/_GeneratedVolumes";
+    if (!UnityEditor.AssetDatabase.IsValidFolder(dir)) UnityEditor.AssetDatabase.CreateFolder("Assets", "_GeneratedVolumes");
+    UnityEditor.AssetDatabase.CreateAsset(profile, dir + "/AutoGlobalVolumeProfile.asset");
+    vol.sharedProfile = profile;
+    volumeCreated = true;
+}
+report["volume_created"] = volumeCreated;
+
+// 2. Every light -> Realtime mode.
+var lights = UnityEngine.Object.FindObjectsByType<UnityEngine.Light>(UnityEngine.FindObjectsSortMode.None);
+int lightsFixed = 0;
+foreach (var l in lights) {
+    if (l.lightmapBakeType != UnityEngine.LightmapBakeType.Realtime) { l.lightmapBakeType = UnityEngine.LightmapBakeType.Realtime; lightsFixed++; }
+}
+report["light_count"] = lights.Length;
+report["lights_fixed"] = lightsFixed;
+
+// 3. Zero lights -> create one baseline directional light so the agent has something to adjust.
+bool lightCreated = false;
+if (lights.Length == 0) {
+    var go = new UnityEngine.GameObject("Directional Light");
+    var l = go.AddComponent<UnityEngine.Light>();
+    l.type = UnityEngine.LightType.Directional;
+    l.lightmapBakeType = UnityEngine.LightmapBakeType.Realtime;
+    l.intensity = 1.0f;
+    go.transform.rotation = UnityEngine.Quaternion.Euler(50f, -30f, 0f);
+    lightCreated = true;
+}
+report["baseline_light_created"] = lightCreated;
+
+// 4. Every reflection probe -> Realtime mode.
+var probes = UnityEngine.Object.FindObjectsByType<UnityEngine.ReflectionProbe>(UnityEngine.FindObjectsSortMode.None);
+int probesFixed = 0;
+foreach (var p in probes) {
+    if (p.mode != UnityEngine.Rendering.ReflectionProbeMode.Realtime) { p.mode = UnityEngine.Rendering.ReflectionProbeMode.Realtime; probesFixed++; }
+}
+report["probe_count"] = probes.Length;
+report["probes_fixed"] = probesFixed;
+
+return report;
+""".strip()
+
+
+def ensure_scene_ready(scene_path: str | None = None) -> dict:
+    """Bootstrap the CURRENT scene so mood changes will actually be
+    visible in real time (see docs/unity-lighting-rendering-concepts.md):
+    calls capture_scene_baseline() FIRST (guarantees the real original is
+    saved before anything below touches it), then creates a missing
+    Global Volume, forces every Light + ReflectionProbe to Realtime mode
+    (Baked/Mixed would silently freeze mood changes until a manual
+    rebake), and creates one baseline light if the scene has none at
+    all. Deterministic, code-orchestrated — same tier as
+    cleanup_agent_lights()/reset_post_processing(), called once at the
+    top of main.py's run(), no LLM judgment involved."""
+    baseline = capture_scene_baseline(scene_path)
+    result = subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", _ENSURE_READY_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    report = json.loads(result.stdout)
+    report["baseline"] = baseline
+    return report
+
+
+def restore_scene_baseline(scene_path: str | None = None) -> dict:
+    """Restore the CURRENT scene to its captured baseline (lights'
+    mode+properties, reflection probe modes, skybox material,
+    post-processing) — reads what capture_scene_baseline() saved, the
+    real intended replacement for reset_post_processing()'s old
+    'reset to an invented neutral' approach. This is what a future
+    reset UI button calls. Returns an error dict if no baseline was ever
+    captured for this scene (nothing to restore to)."""
+    if scene_path is None:
+        scene_path = get_active_scene().path
+    path = _baseline_path_for_scene(scene_path)
+    if not os.path.exists(path):
+        return {"status": "error", "error": f"No baseline captured yet for '{scene_path}'. Call capture_scene_baseline() first."}
+
+    with open(path, "r", encoding="utf-8") as f:
+        baseline = json.load(f)
+
+    skybox_path = baseline.get("skybox_material_path")
+
+    # Inline each restore value as a direct C# literal per target, rather than
+    # JSON-deserializing inside script eval — simpler given the mixed types here,
+    # and consistent with how every other write in this file builds its script.
+    light_restores = []
+    for light in baseline["lights"]:
+        light_restores.append(
+            f'foreach (var l in UnityEngine.Object.FindObjectsByType<UnityEngine.Light>(UnityEngine.FindObjectsSortMode.None)) {{ '
+            f'if (l.gameObject.GetEntityId().ToString() == "{light["instance_id"]}") {{ '
+            f'l.lightmapBakeType = UnityEngine.LightmapBakeType.{light["mode"]}; '
+            f'l.intensity = {light["intensity"]}f; '
+            f'l.color = new UnityEngine.Color({light["color_r"]}f, {light["color_g"]}f, {light["color_b"]}f); '
+            f'l.range = {light["range"]}f; break; }} }}'
+        )
+    probe_restores = []
+    for probe in baseline["reflection_probes"]:
+        probe_restores.append(
+            f'foreach (var p in UnityEngine.Object.FindObjectsByType<UnityEngine.ReflectionProbe>(UnityEngine.FindObjectsSortMode.None)) {{ '
+            f'if (p.gameObject.GetEntityId().ToString() == "{probe["instance_id"]}") {{ '
+            f'p.mode = UnityEngine.Rendering.ReflectionProbeMode.{probe["mode"]}; break; }} }}'
+        )
+    skybox_restore = ""
+    if skybox_path:
+        skybox_restore = (
+            f'var sky = UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEngine.Material>("{skybox_path}"); '
+            f'if (sky != null) {{ UnityEngine.RenderSettings.skybox = sky; UnityEngine.DynamicGI.UpdateEnvironment(); }}'
+        )
+
+    full_script = "\n".join(light_restores + probe_restores + [skybox_restore, "return new { ok = true };"])
+    subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", full_script, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    ca = baseline["color_adjustments"]
+    set_color_adjustments(
+        post_exposure=ca["post_exposure"],
+        contrast=ca["contrast"],
+        saturation=ca["saturation"],
+        color_filter=(ca["color_filter_r"], ca["color_filter_g"], ca["color_filter_b"]),
+    )
+    vig = baseline["vignette"]
+    set_vignette(intensity=vig["intensity"], smoothness=vig["smoothness"])
+    fog = baseline["fog"]
+    set_fog(
+        enabled=fog["enabled"],
+        color=(fog["color_r"], fog["color_g"], fog["color_b"]),
+        density=fog["density"],
+        start_distance=fog["start_distance"],
+        end_distance=fog["end_distance"],
+    )
+
+    return {"status": "restored", "scene_path": scene_path, "lights_restored": len(baseline["lights"]), "probes_restored": len(baseline["reflection_probes"])}

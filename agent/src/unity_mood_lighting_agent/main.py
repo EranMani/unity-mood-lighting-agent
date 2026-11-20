@@ -33,8 +33,16 @@ from dotenv import load_dotenv
 
 from unity_mood_lighting_agent.agent import agent, get_scene_context
 from unity_mood_lighting_agent.judge import judge_mood_match
-from unity_mood_lighting_agent.tools import cleanup_agent_lights, reset_post_processing
-from unity_mood_lighting_agent.unity_bridge import capture_game_view, get_active_scene, image_to_data_url, open_scene
+from unity_mood_lighting_agent.tools import cleanup_agent_lights
+from unity_mood_lighting_agent.unity_bridge import (
+    capture_game_view,
+    capture_scene_baseline,
+    ensure_scene_ready,
+    get_active_scene,
+    image_to_data_url,
+    open_scene,
+    restore_scene_baseline,
+)
 
 load_dotenv()
 
@@ -70,8 +78,17 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
     deleted = cleanup_agent_lights()
     if deleted:
         print(f"[cleanup] removed {len(deleted)} light(s) from a previous run: {deleted}")
-    reset_post_processing()
-    print("[cleanup] reset post-processing to neutral baseline")
+
+    baseline = capture_scene_baseline()
+    print(f"[baseline] {baseline['status']}")
+    restore_scene_baseline()
+    print("[scene] restored lights/probes/skybox/post-processing to captured baseline")
+    readiness = ensure_scene_ready()
+    print(
+        f"[scene] ready: {readiness['light_count']} light(s) ({readiness['lights_fixed']} set to Realtime), "
+        f"{readiness['probe_count']} probe(s) ({readiness['probes_fixed']} set to Realtime), "
+        f"volume_created={readiness['volume_created']}, baseline_light_created={readiness['baseline_light_created']}"
+    )
 
     feedback = ""  # judge's notes from the previous failed attempt, if any
 

@@ -414,6 +414,37 @@ product boundary is in the right place.
     → Forest), and `TestRoom` (bare plane+cube, no atmosphere to work
     with) is dropped from eval scope entirely, not useful as a mood test.
 
+35. **v6 built: scene readiness + real baseline capture/restore.**
+    `docs/unity-lighting-rendering-concepts.md` records the underlying
+    Unity knowledge (Realtime/Baked/Mixed is per-LIGHT, not per-scene;
+    Reflection Probes have the same baked-vs-realtime split and do NOT
+    only affect static objects; Light Probes/APV are for dynamic-object
+    GI; the Static checkbox bundles several sub-flags). Three new
+    deterministic functions in `unity_bridge.py`: `capture_scene_baseline()`
+    (snapshots lights' mode+properties, reflection probe modes, skybox
+    material, GI settings, post-processing — ONLY if no baseline exists
+    yet for that scene path, never overwrites), `ensure_scene_ready()`
+    (creates a missing Global Volume, forces every Light + ReflectionProbe
+    to Realtime mode — Baked/Mixed would silently freeze mood changes
+    until a manual rebake — creates one baseline light if the scene has
+    zero), `restore_scene_baseline()` (resets everything back to the
+    captured original — the real replacement for the old
+    `reset_post_processing()`'s "reset to an invented neutral," and the
+    future reset-button's backing function). **Verified live, real round
+    trip:** mutated color adjustments + skybox, restored, confirmed both
+    landed back on the true captured values, not an approximation.
+    **Caught the exact contamination bug this was built to prevent,
+    immediately:** the Forest scene's first capture already reflected
+    the eval suite's leftover `noir` grading (saturation=-100), not the
+    pack's real defaults — manually corrected in the saved JSON using an
+    earlier genuine reading from before any eval case ran (documented
+    inline in the JSON's `_note` field). `main.py`'s `run()` now calls
+    cleanup_agent_lights() first (removes agent-created lights from a
+    previous run), then capture → restore → ensure_ready, in that exact
+    order (restore must run before ensure_ready, since restore reverts
+    the probe back to its original Baked mode — confirmed live both
+    fixes fire correctly every run without fighting each other).
+
 ---
 
 ## Open questions / not yet decided

@@ -1,0 +1,50 @@
+{
+  "lights": [
+    {
+      "instance_id": "568105584918935082",
+      "name": "UNS_Main_Light",
+      "mode": "Realtime",
+      "type": "Directional",
+      "intensity": 2.8,
+      "color_r": 1,
+      "color_g": 0.9,
+      "color_b": 0.68,
+      "range": 10
+    }
+  ],
+  "reflection_probes": [
+    {
+      "instance_id": "568105584918948692",
+      "name": "UNS_Reflection_Probe",
+      "mode": "Baked"
+    }
+  ],
+  "skybox_material_path": "Assets/InnerverseInteractive/Ultimate Nature \u2013 Starter/Environment/Sky/Materials/UNS_Skybox_Panoramic.mat",
+  "realtime_gi": false,
+  "baked_gi": false,
+  "scene_path": "Assets/InnerverseInteractive/Ultimate Nature \u2013 Starter/Demo/Scenes/Forest/UNS_Demo.unity",
+  "color_adjustments": {
+    "post_exposure": -0.08,
+    "contrast": 23.0,
+    "saturation": 13.0,
+    "color_filter_r": 1.0,
+    "color_filter_g": 0.965,
+    "color_filter_b": 0.91
+  },
+  "vignette": {
+    "exists": true,
+    "intensity": 0.15,
+    "smoothness": 0.75
+  },
+  "_note": "color_adjustments/vignette manually corrected 2026-11-20: the first live capture already reflected the eval suite's leftover 'noir' grading (contamination from before this baseline feature existed), these restored values are the real pack defaults, read directly from the Editor right after the isGlobal Volume fix, before any eval case ran.",
+  "fog": {
+    "enabled": true,
+    "color_r": 0.72,
+    "color_g": 0.72,
+    "color_b": 0.72,
+    "mode": "Exponential",
+    "density": 0.02,
+    "start_distance": 18.0,
+    "end_distance": 45.0
+  }
+}
