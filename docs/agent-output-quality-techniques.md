@@ -92,14 +92,56 @@ Some models (o1/o3-style "reasoning" models, and reasoning-mode
 variants of GPT-5) generate hidden reasoning tokens internally before
 their visible output, without needing a schema trick at all. That's a
 model-level capability, not something you engineer via field order.
-The difference that matters practically: native hidden reasoning isn't
-inspectable or loggable (you can't read what it "thought"), while an
-explicit `reasoning` field in your own schema IS visible, logged,
-diffable across runs — you can go back and read exactly what the judge
-saw before scoring something low. For a project where debugging *why*
-a mood judgement came out a certain way matters (this one, given the
-retry-loop feeds judge feedback into the next attempt), explicit >
-hidden, even on a model that also does native reasoning underneath.
+
+**How much does this actually matter for results, not just debugging?**
+This is the real engineering question, and the honest answer is: it
+depends entirely on whether meaningful hidden reasoning is actually
+happening, and you usually don't know that unless you check.
+
+- The Agents SDK's `ModelSettings` dataclass has a `reasoning` field —
+  checked live: `dataclasses.fields(ModelSettings)` shows it defaults
+  to `None`. Then checked this project's actual code: **zero**
+  occurrences of `model_settings`/`reasoning` anywhere in `agent.py` or
+  `judge.py`. Neither agent has ever configured a reasoning effort.
+  That means both are running on whatever `gpt-5.4-mini`'s own default
+  is — and "mini"/fast model tiers commonly ship with reduced or
+  minimal reasoning budget by default, specifically to keep latency
+  and cost down. **We don't actually know how much, if any, hidden
+  deliberation is happening on these calls**, and the honest
+  engineering move is to not assume there's meaningful hidden
+  reasoning covering for you, rather than hope it does.
+- This is exactly why the explicit `reasoning` field matters more than
+  it might look like on paper: if there's little or no hidden
+  deliberation happening (plausible, maybe likely, on an unconfigured
+  mini-tier model), the explicit field isn't a nice-to-have alongside
+  "probably good enough" native reasoning — it's the **only**
+  mechanism actually forcing the model to generate grounded
+  observations before committing to a score. Remove it, and on this
+  specific setup, there may be no deliberation step at all between
+  "look at image" and "produce a number."
+- Even on a model that DOES have strong native reasoning turned on,
+  the explicit field still isn't redundant, for two separate reasons:
+  (1) **faithfulness isn't guaranteed** — a model's hidden reasoning
+  and its final visible answer can diverge (a documented failure mode
+  in reasoning-model research: the chain of thought doesn't always
+  cause the final answer, it can rationalize one reached some other
+  way). An explicit field the final score is positioned right after,
+  in the same visible context, gives the score something concrete and
+  recent to actually condition on, rather than relying on whatever
+  happened in a separate, unverifiable internal channel. (2) hidden
+  reasoning, even when it exists, is often not returned by the API at
+  all, or only as a compressed summary — you can't log it, diff it
+  across runs, or debug a bad judgement against it. The explicit field
+  costs a handful of extra output tokens and buys genuine inspectability
+  either way.
+- **The practical rule, not just for this project:** never assume a
+  model is doing invisible deliberation you haven't explicitly
+  configured and verified. If a task needs grounded, deliberate
+  output, engineer that deliberation into something you control (field
+  order, explicit prompting) rather than hoping reasoning_effort
+  defaults are doing it for you silently. Checking `ModelSettings`
+  instead of guessing took one function call — worth doing before
+  asserting anything about what a model is or isn't doing internally.
 
 ### Verified live, not just "it's a known technique"
 
