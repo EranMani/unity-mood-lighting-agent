@@ -8,6 +8,51 @@ per technique.
 
 ---
 
+## Reference: `ModelSettings` — the knob panel between Agent and the raw API call
+
+Came up while investigating whether our agents do any hidden reasoning
+(see Technique 1's native-CoT section below) — worth its own reference
+entry since it's the control surface for ANY future tuning of either
+agent, not just reasoning.
+
+**The mental model split:**
+- **Agent-level config** (`instructions`, `tools`, `output_type`,
+  `name`, which model) — defines WHAT the agent is / does.
+- **`ModelSettings`** — tunes HOW the actual API call to that model is
+  made. Passed via `Agent(model_settings=...)` or per-run via
+  `Runner.run(..., run_config=RunConfig(model_settings=...))`. Every
+  field defaults to `None` — unset means "use the provider's own
+  default for this model," not "off."
+
+**The fields, grouped by what they actually control:**
+
+| Group | Fields | What they do |
+|---|---|---|
+| Sampling/randomness | `temperature`, `top_p`, `frequency_penalty`, `presence_penalty` | How random/repetitive output is |
+| Tool-calling behavior | `tool_choice`, `parallel_tool_calls` | Force a specific tool vs let the model choose; allow multiple tool calls per turn or not |
+| Reasoning | `reasoning`, `verbosity` | How much internal deliberation effort a reasoning-capable model spends before answering, and how verbose the visible output is |
+| Output limits | `max_tokens`, `truncation`, `top_logprobs` | Caps response length, context-overflow handling, per-token confidence data |
+| Observability/infra | `metadata`, `store`, `include_usage`, `response_include`, `prompt_cache_retention`, `prompt_cache_options`, `preserve_raw_usage` | Tracing, caching, usage-tracking — not behavior |
+| Reliability | `retry`, `timeout`, `context_management` | Retry policy, request timeout, how conversation history gets trimmed if it overflows |
+| Raw passthrough | `extra_query`, `extra_body`, `extra_headers`, `extra_args` | Escape hatches straight to the underlying API client for anything the SDK doesn't wrap yet |
+
+**Current state of this project (checked live, not assumed):**
+`dataclasses.fields(ModelSettings)` confirmed every field defaults to
+`None`; grepping `agent.py`/`judge.py` found zero occurrences of
+`model_settings` anywhere. Neither the lighting agent nor the judge has
+ever had ANY of these tuned — both run on `gpt-5.4-mini`'s raw
+defaults for sampling, reasoning effort, tool_choice, everything.
+
+**Decided live with Eran (2026-11-20):** don't touch any of this
+speculatively. Run the full eval suite first and look at the real
+numbers. Only reach for `ModelSettings` (most likely candidate:
+`reasoning`, to force more deliberation effort) if the results show an
+actual quality problem worth solving — tuning knobs before you've
+measured whether there's a problem is the same mistake as adding a
+guardrail nobody's hit yet.
+
+---
+
 ## Technique 1: reasoning-first field order in structured output
 
 **What we did:** `judge.py`'s `MoodJudgement` schema had a `notes`
