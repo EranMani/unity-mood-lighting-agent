@@ -283,6 +283,14 @@ forward: **every tuning change gets a dated entry recording what
 changed, why, and the measured before/after** — progress or regression,
 not just "we tried something." No more ad-hoc notes without a verdict.
 
+**Before writing any date in this table or anywhere in this doc: check
+the ACTUAL current date (e.g. from the system/conversation context),
+never copy a date from an existing entry above.** Caught a real bug
+2026-11-23: an entire table's worth of rows got mislabeled 2026-11-20,
+copied from an older, genuinely-correct README entry, without checking
+what day it actually was. A change log with wrong dates looks fake and
+can't be trusted for sequencing later.
+
 ### Change log
 
 | Date | Change | Rationale | Case(s) tested | Score before → after | Verdict |
