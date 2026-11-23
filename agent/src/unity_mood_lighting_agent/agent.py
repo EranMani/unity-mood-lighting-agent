@@ -24,6 +24,7 @@ from unity_mood_lighting_agent.tools import (
 from unity_mood_lighting_agent.unity_bridge import (
     get_color_adjustments,
     get_fog,
+    get_scene_bounds,
     get_vignette,
     list_scene_transforms,
 )
@@ -97,6 +98,15 @@ def get_scene_context() -> str:
         for o in scene
     )
 
+    bounds = get_scene_bounds()
+    bounds_section = (
+        "Scene bounding box (real spatial grounding — any position you give to "
+        "create_light/set_object_transform outside this range will be rejected):\n"
+        f"- x: {bounds.min_x:.1f} to {bounds.max_x:.1f}\n"
+        f"- y: {bounds.min_y:.1f} to {bounds.max_y:.1f}\n"
+        f"- z: {bounds.min_z:.1f} to {bounds.max_z:.1f}"
+    )
+
     color = get_color_adjustments()
     vignette = get_vignette()
     fog = get_fog()
@@ -115,4 +125,4 @@ def get_scene_context() -> str:
         f"color=({fog.color_r}, {fog.color_g}, {fog.color_b})"
     )
 
-    return f"{transforms_section}\n\n{post_processing_section}"
+    return f"{transforms_section}\n\n{bounds_section}\n\n{post_processing_section}"

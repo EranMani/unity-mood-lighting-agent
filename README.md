@@ -445,6 +445,42 @@ product boundary is in the right place.
     the probe back to its original Baked mode — confirmed live both
     fixes fire correctly every run without fighting each other).
 
+36. **save_scene() — explicit, deliberate save, decided live with Eran.**
+    Nothing in this pipeline auto-saves; found live that `git status`
+    showed zero diff on the Forest scene file despite a full passing
+    mood run, confirming every mutation only ever lived in the Editor's
+    in-memory session. `save_scene()` is a plain function, NOT an agent
+    tool — the agent never decides to persist its own work, only a
+    human does. Verifying it (after an unplanned Editor restart) found
+    a real bug: `GetEntityId()` instance IDs are NOT stable across
+    Editor sessions, so `restore_scene_baseline()`'s matching silently
+    no-opped while still reporting success. Fixed with the same
+    instance-id-then-name fallback this project already built once
+    before (step 25's `_resolve_target`) — verified live, correct
+    restore even with a changed instance ID.
+
+37. **Real spatial grounding — full bounding box + a guardrail planned
+    since v0, never built until now.** `get_scene_bounds()` only ever
+    returned a single diagonal number (for the fog guardrail); extended
+    to return the actual min/max corners on every axis. Surfaced into
+    `get_scene_context()` so the agent has real coordinates to reason
+    with, not just individual object positions. `check_position_within_
+    bounds()` + a shared `_check_within_bounds()` guardrail wired into
+    every placement path (`set_object_transform`/`aim_light_at` via
+    `_apply_transform_with_guardrail`, `create_light`, `create_light_
+    near`) — rejects any position outside the scene's real box on any
+    axis. Verified the primitive directly (clear pass/fail on an
+    obviously-outside position); the SDK's internal tool-invocation
+    plumbing resisted a direct call to the wrapped `@function_tool`
+    itself (same friction step 4 hit calling a decorated function
+    directly), so that specific path is verified by code-structure
+    match to the already-proven `count_lights()` cap check, not an
+    isolated live rejection test — worth a closer look if a future
+    mood test ever produces an out-of-bounds placement that doesn't
+    get rejected. A full pipeline run (zen mood) completed clean with
+    the new guardrail in place, confirming it doesn't break normal
+    operation at least.
+
 ---
 
 ## Open questions / not yet decided

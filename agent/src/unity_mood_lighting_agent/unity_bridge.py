@@ -744,25 +744,43 @@ foreach (var t in UnityEngine.Object.FindObjectsByType<UnityEngine.Transform>())
   max = UnityEngine.Vector3.Max(max, p);
 }
 var size = max - min;
-return new { diagonal = size.magnitude };
+return new {
+  diagonal = size.magnitude,
+  min_x = min.x, min_y = min.y, min_z = min.z,
+  max_x = max.x, max_y = max.y, max_z = max.z
+};
 """.strip()
 
 
 class SceneBounds(BaseModel):
-    """Overall scene scale — used to sanity-check fog distances against
-    the room's actual size, not a generic/guessed number."""
+    """The scene's real spatial envelope — every object's position
+    rolled into one min/max box. Used both to sanity-check fog distances
+    (diagonal) and to ground the agent's own placement/creation
+    decisions in real coordinates, and to reject anything placed outside
+    it (see check_position_within_bounds)."""
 
     diagonal: float = Field(description="Distance across the whole scene's bounding box, corner to corner.")
+    min_x: float
+    min_y: float
+    min_z: float
+    max_x: float
+    max_y: float
+    max_z: float
 
 
 def get_scene_bounds() -> SceneBounds:
-    """Compute the scene's overall diagonal size from every object's
-    position. Found live (Eran caught it): the agent set fog
-    end_distance=35 in a room whose real diagonal is ~22.8 — fog that
-    extends well past the room's far wall fogs almost everything visible
-    with no real near/far gradient, reading as a flat washed-out haze
-    instead of atmospheric depth. This is what set_fog's guardrail checks
-    distances against."""
+    """Compute the scene's real bounding box (min/max corners on every
+    axis, plus the diagonal) from every object's position. Found live
+    (Eran caught it): the agent set fog end_distance=35 in a room whose
+    real diagonal is ~22.8 — fog that extends well past the room's far
+    wall fogs almost everything visible with no real near/far gradient,
+    reading as a flat washed-out haze instead of atmospheric depth. The
+    diagonal is what set_fog's guardrail checks distances against; the
+    full min/max box is what gives the agent real spatial grounding for
+    placement (surfaced in get_scene_context()) and what
+    check_position_within_bounds() rejects placements outside of —
+    planned in the original v0 tool list, never actually built until
+    now."""
     result = subprocess.run(
         [UNITY_EXE, "command", "script", "eval", _GET_SCENE_BOUNDS_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
         capture_output=True,
@@ -770,6 +788,32 @@ def get_scene_bounds() -> SceneBounds:
         check=True,
     )
     return SceneBounds(**json.loads(result.stdout))
+
+
+class PositionBoundsCheck(BaseModel):
+    """Whether a candidate position sits inside the scene's real
+    bounding box (every axis, not just distance) — planned in the
+    original v0 guardrail list ('position within the scene's bounding
+    box, reject lights placed outside the room/level geometry'), never
+    actually built until now."""
+
+    within: bool
+    bounds: SceneBounds = Field(description="The scene's current bounding box, for building a useful rejection message.")
+
+
+def check_position_within_bounds(position: tuple[float, float, float]) -> PositionBoundsCheck:
+    """Pure math, no new Unity call beyond the get_scene_bounds() read —
+    checks a candidate position against every axis (x/y/z — width,
+    height, length) of the scene's real bounding box, not just overall
+    scale. Strict min/max, no padding margin: the bounds are computed
+    from object PIVOT positions, not actual mesh surfaces, so a
+    placement that's technically a little outside the measured box can
+    still be visually 'in the room' — if this rejects too eagerly in
+    practice, that's the first thing to loosen, not the check itself."""
+    bounds = get_scene_bounds()
+    x, y, z = position
+    within = bounds.min_x <= x <= bounds.max_x and bounds.min_y <= y <= bounds.max_y and bounds.min_z <= z <= bounds.max_z
+    return PositionBoundsCheck(within=within, bounds=bounds)
 
 
 # --- Skybox (HDRI) -----------------------------------------------------

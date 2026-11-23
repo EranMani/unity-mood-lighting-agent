@@ -17,6 +17,7 @@ acceptable at this scene size.
 from agents import function_tool
 
 from unity_mood_lighting_agent.unity_bridge import (
+    check_position_within_bounds,
     check_rotation_aims_at_geometry,
     compute_look_at_rotation,
     count_lights,
@@ -70,6 +71,24 @@ def _resolve_target(objects, target: str):
     return next((o for o in objects if o.name == target), None)
 
 
+def _check_within_bounds(position: tuple[float, float, float]) -> str | None:
+    """Shared bounds guardrail (planned in the original v0 list, never
+    built until now) — returns a rejection message if position is
+    outside the scene's real bounding box on any axis, None if it's
+    fine. Called from every write path that places/moves something
+    (same 'one shared check, can't be missed by a future tool' reasoning
+    as _apply_transform_with_guardrail's rotation check)."""
+    check = check_position_within_bounds(position)
+    if check.within:
+        return None
+    b = check.bounds
+    return (
+        f"Rejected: position {position} is outside the scene's real bounding box "
+        f"(x: {b.min_x:.1f} to {b.max_x:.1f}, y: {b.min_y:.1f} to {b.max_y:.1f}, "
+        f"z: {b.min_z:.1f} to {b.max_z:.1f}). Pick a position inside the actual room/level geometry."
+    )
+
+
 def _apply_transform_with_guardrail(
     target: str,
     position: tuple[float, float, float] | None,
@@ -87,6 +106,12 @@ def _apply_transform_with_guardrail(
 
     position_for_check = position if position is not None else (current.pos_x, current.pos_y, current.pos_z)
     rotation_for_check = rotation if rotation is not None else (current.rot_x, current.rot_y, current.rot_z)
+
+    if position is not None:
+        bounds_error = _check_within_bounds(position_for_check)
+        if bounds_error is not None:
+            return bounds_error
+
     check = check_rotation_aims_at_geometry(position_for_check, rotation_for_check, self_id=target)
     if not check.hit:
         return (
@@ -211,6 +236,10 @@ def create_light(
     if count_lights() >= MAX_LIGHTS:
         return f"Rejected: scene already has {MAX_LIGHTS} lights (the cap). Adjust existing lights instead of adding more."
 
+    bounds_error = _check_within_bounds((pos_x, pos_y, pos_z))
+    if bounds_error is not None:
+        return bounds_error
+
     tagged_name = f"{AGENT_LIGHT_PREFIX}{name}"
     try:
         instance_id = _create_light(name=tagged_name, position=(pos_x, pos_y, pos_z), light_type=light_type)
@@ -291,6 +320,10 @@ def create_light_near(
 
     light_position = (aim_at.pos_x + offset_x, aim_at.pos_y + offset_y, aim_at.pos_z + offset_z)
     target_position = (aim_at.pos_x, aim_at.pos_y, aim_at.pos_z)
+
+    bounds_error = _check_within_bounds(light_position)
+    if bounds_error is not None:
+        return bounds_error
 
     tagged_name = f"{AGENT_LIGHT_PREFIX}{name}"
     try:
