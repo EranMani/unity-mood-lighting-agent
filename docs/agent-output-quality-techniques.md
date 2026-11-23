@@ -1,6 +1,6 @@
 # Agent output quality techniques — reference
 
-Living doc, started 2026-11-20. Each entry: what we did, why it actually
+Living doc, started 2026-11-23. Each entry: what we did, why it actually
 works (the mechanism, not just "it's a known trick"), where it applies
 and where it doesn't, and what we actually verified live. Add to this
 file as new techniques get tried on this project, don't start a new one
@@ -43,7 +43,7 @@ agent, not just reasoning.
 ever had ANY of these tuned — both run on `gpt-5.4-mini`'s raw
 defaults for sampling, reasoning effort, tool_choice, everything.
 
-**Decided live with Eran (2026-11-20):** don't touch any of this
+**Decided live with Eran (2026-11-23):** don't touch any of this
 speculatively. Run the full eval suite first and look at the real
 numbers. Only reach for `ModelSettings` (most likely candidate:
 `reasoning`, to force more deliberation effort) if the results show an

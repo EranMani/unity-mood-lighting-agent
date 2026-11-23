@@ -26,7 +26,7 @@ class MoodJudgement(BaseModel):
     what the image actually shows before committing to a number lets
     that description condition the score, instead of the model jumping
     straight to a number with no deliberation. Decided live with Eran,
-    2026-11-20 — this reframes/replaces the old 'notes' field, which was
+    2026-11-23 — this reframes/replaces the old 'notes' field, which was
     positioned last and explicitly 'debugging only, not branched on',
     exactly backwards from this technique."""
 
