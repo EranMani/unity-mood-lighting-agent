@@ -1121,7 +1121,7 @@ def restore_scene_baseline(scene_path: str | None = None) -> dict:
     for light in baseline["lights"]:
         light_restores.append(
             f'foreach (var l in UnityEngine.Object.FindObjectsByType<UnityEngine.Light>(UnityEngine.FindObjectsSortMode.None)) {{ '
-            f'if (l.gameObject.GetEntityId().ToString() == "{light["instance_id"]}") {{ '
+            f'if (l.gameObject.GetEntityId().ToString() == "{light["instance_id"]}" || l.gameObject.name == "{light["name"]}") {{ '
             f'l.lightmapBakeType = UnityEngine.LightmapBakeType.{light["mode"]}; '
             f'l.intensity = {light["intensity"]}f; '
             f'l.color = new UnityEngine.Color({light["color_r"]}f, {light["color_g"]}f, {light["color_b"]}f); '
@@ -1131,7 +1131,7 @@ def restore_scene_baseline(scene_path: str | None = None) -> dict:
     for probe in baseline["reflection_probes"]:
         probe_restores.append(
             f'foreach (var p in UnityEngine.Object.FindObjectsByType<UnityEngine.ReflectionProbe>(UnityEngine.FindObjectsSortMode.None)) {{ '
-            f'if (p.gameObject.GetEntityId().ToString() == "{probe["instance_id"]}") {{ '
+            f'if (p.gameObject.GetEntityId().ToString() == "{probe["instance_id"]}" || p.gameObject.name == "{probe["name"]}") {{ '
             f'p.mode = UnityEngine.Rendering.ReflectionProbeMode.{probe["mode"]}; break; }} }}'
         )
     skybox_restore = ""
@@ -1168,3 +1168,37 @@ def restore_scene_baseline(scene_path: str | None = None) -> dict:
     )
 
     return {"status": "restored", "scene_path": scene_path, "lights_restored": len(baseline["lights"]), "probes_restored": len(baseline["reflection_probes"])}
+
+
+# --- Explicit save (decided live with Eran, 2026-11-20) -------------------
+#
+# Nothing in this pipeline auto-saves to disk. Every mood attempt, every
+# ensure_scene_ready() fix, every restore — all of it only exists in the
+# Editor's live in-memory session until save_scene() is called. Confirmed
+# live: `git status` showed zero changes to the Forest .unity file despite
+# a full mood test run having visibly changed lights/probes/skybox/post-
+# processing. Decided deliberately, not a gap to close: the user should
+# control when a result is worth keeping (auto-save on every attempt,
+# including failed ones, would be the wrong default — see the real
+# alternatives discussed and rejected: auto-save every change, or save-
+# only-on-judge-pass). This is a plain function, NOT wired into agent.py's
+# tool list — the agent never decides to persist its own work.
+
+def save_scene(scene_path: str | None = None) -> dict:
+    """Explicitly save the CURRENT scene to disk — a deliberate user
+    action, never called automatically by anything in this pipeline.
+    scene_path is accepted for API symmetry with the other scene
+    functions but isn't required to match since EditorSceneManager only
+    ever saves the actual active scene."""
+    script = (
+        "var s = UnityEditor.SceneManagement.EditorSceneManager.GetActiveScene(); "
+        "bool ok = UnityEditor.SceneManagement.EditorSceneManager.SaveScene(s); "
+        "return new { ok = ok, path = s.path };"
+    )
+    result = subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
