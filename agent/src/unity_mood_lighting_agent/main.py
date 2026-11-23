@@ -38,6 +38,7 @@ from unity_mood_lighting_agent.tools import cleanup_agent_lights
 from unity_mood_lighting_agent.unity_bridge import (
     capture_game_view,
     capture_scene_baseline,
+    check_frame_visibility,
     ensure_scene_ready,
     get_active_scene,
     image_to_data_url,
@@ -64,6 +65,25 @@ def _log_result(task: str, attempts_used: int, passed: bool, judgement, case_nam
         "dominant_color_temp": judgement.dominant_color_temp,
         "contrast_level": judgement.contrast_level,
         "notes": judgement.reasoning,
+    }
+    with open(LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
+def _log_guardrail_rejection(task: str, attempt: int, visibility, case_name: str | None = None) -> None:
+    """Separate from _log_result — this is a guardrail catch, not a judge
+    score. No MoodJudgement exists here (judge was never called, that's
+    the whole point — save the LLM call on a frame with nothing to
+    score)."""
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "case_name": case_name,
+        "task": task,
+        "attempts_used": attempt,
+        "passed": False,
+        "guardrail_rejected": "visibility",
+        "mean_brightness": visibility.mean_brightness,
+        "pct_near_black": visibility.pct_near_black,
     }
     with open(LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
@@ -144,6 +164,41 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
             ]
 
             result = await Runner.run(agent, prompt)
+
+            # Guardrail: check the ACTUAL rendered pixels before paying
+            # for the judge LLM call. Found live that per-field clamps
+            # can't catch this — a compound stack of individually
+            # "reasonable" changes (exposure+vignette+fog+lights) can
+            # still render to near-black. Code decides this, not an LLM,
+            # same split as everywhere else in this project.
+            post_attempt_capture = capture_game_view()
+            visibility = check_frame_visibility(post_attempt_capture.path)
+            if not visibility.visible:
+                print(
+                    f"[guardrail] frame unreadable after attempt {attempt}/{MAX_ATTEMPTS} "
+                    f"(mean_brightness={visibility.mean_brightness}/255, "
+                    f"pct_near_black={visibility.pct_near_black}%) — skipping judge call"
+                )
+                feedback = (
+                    f"Your last change made the scene nearly completely black/unreadable "
+                    f"(mean brightness {visibility.mean_brightness}/255, "
+                    f"{visibility.pct_near_black}% of pixels near-black). This is NOT a valid "
+                    "interpretation of any mood — the scene's content must still be visible. "
+                    "Pull back exposure/vignette/fog/light intensity until content is visible "
+                    "again, then re-apply the mood more moderately — commit to the mood through "
+                    "color/contrast/shadow shape, not by erasing the image."
+                )
+                if attempt == MAX_ATTEMPTS:
+                    _log_guardrail_rejection(task, attempt, visibility, case_name)
+                    result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))
+                    print(f"[screenshot] result saved: {result_shot.path}")
+                    return (
+                        f"Gave up after {MAX_ATTEMPTS} attempts. Final attempt was rejected by "
+                        f"the visibility guardrail (frame unreadable: "
+                        f"mean_brightness={visibility.mean_brightness}/255)."
+                    )
+                continue  # skip the judge entirely, retry without burning that call
+
             passed, judgement = await judge_mood_match(task)
 
             print(

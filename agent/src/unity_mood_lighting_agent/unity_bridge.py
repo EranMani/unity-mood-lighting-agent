@@ -276,6 +276,71 @@ def capture_game_view(output_path: str | None = None) -> CaptureResult:
     return CaptureResult(path=raw["savedPath"], width=raw["width"], height=raw["height"])
 
 
+# --- Rendered-content visibility guardrail (decided live with Eran,
+# 2026-11-23) ----------------------------------------------------------
+#
+# Found live: a "post-apocalyptic" attempt went to a near-pure-black
+# frame (mean_brightness=4.1/255, 98.8% of pixels near-black, vs a
+# normal scene's 86.5/255 and 0.2%) after 3 attempts of the agent
+# pushing exposure/vignette/fog further in the same direction with no
+# signal it had crossed into "unreadable." This CANNOT be caught by
+# clamping any single field's value — none of post_exposure, vignette
+# intensity, or fog density were individually out of Unity's own legal
+# range; it was the COMPOUND effect of several "reasonable alone"
+# changes stacking together. The only reliable check is on the actual
+# RENDERED pixels, not the input parameters that produced them — same
+# principle as everything else in this project: verify the real
+# result, don't trust that reasonable-looking inputs produce a
+# reasonable-looking output.
+#
+# This is plain code (PIL, no LLM) — deciding "is this frame even
+# visible" has one correct answer, same code-decides/LLM-judges split
+# used everywhere else. Run this BEFORE the (expensive) judge LLM call
+# so a genuinely blank frame never costs a model call at all.
+
+VISIBILITY_MEAN_BRIGHTNESS_FLOOR = 10.0  # out of 255
+VISIBILITY_NEAR_BLACK_PCT_CEILING = 90.0  # % of pixels below NEAR_BLACK_THRESHOLD
+NEAR_BLACK_THRESHOLD = 15  # out of 255, per-pixel
+
+
+class FrameVisibility(BaseModel):
+    """Result of checking whether a captured frame has any visible content
+    left, or has been pushed (by exposure/vignette/fog/lights together)
+    past the point where there's anything left to judge a mood against."""
+
+    mean_brightness: float = Field(description="0-255, average luminance across the whole frame.")
+    pct_near_black: float = Field(description="0-100, percentage of pixels below the near-black threshold.")
+    visible: bool = Field(description="False if the frame is effectively blank/unreadable.")
+
+
+def check_frame_visibility(image_path: str) -> FrameVisibility:
+    """Pure pixel-level check, no LLM. Calibrated live against a real
+    failure: a bad frame measured mean_brightness=4.1, pct_near_black=98.8;
+    a normal frame measured 86.5 and 0.2 — wide margin between the two,
+    current thresholds (mean<10 OR >90% near-black) sit well below any
+    legitimately dark mood (horror/noir) seen passing so far. Revisit if
+    a genuinely dark PASSING mood ever trips this floor — not yet
+    observed, so not over-tightened preemptively."""
+    from PIL import Image
+
+    img = Image.open(image_path).convert("L")
+    histogram = img.histogram()  # 256 buckets, index = luminance value
+    total_pixels = img.width * img.height
+    mean_brightness = sum(i * count for i, count in enumerate(histogram)) / total_pixels
+    near_black_pixels = sum(histogram[: NEAR_BLACK_THRESHOLD + 1])
+    pct_near_black = (near_black_pixels / total_pixels) * 100
+
+    visible = (
+        mean_brightness >= VISIBILITY_MEAN_BRIGHTNESS_FLOOR
+        and pct_near_black <= VISIBILITY_NEAR_BLACK_PCT_CEILING
+    )
+    return FrameVisibility(
+        mean_brightness=round(mean_brightness, 1),
+        pct_near_black=round(pct_near_black, 1),
+        visible=visible,
+    )
+
+
 class LightProperties(BaseModel):
     """Current/target values for a Light component's mood-relevant fields."""
 
