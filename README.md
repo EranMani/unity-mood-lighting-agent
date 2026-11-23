@@ -481,6 +481,35 @@ product boundary is in the right place.
     code path. No real gap, just hadn't tried hard enough the first
     time.
 
+38. **Eval suite split per scene, and a real bug found reaching the
+    Mess Hall's baseline.** `eval_suite.json`'s cases now each declare
+    their own `scene` (7 indoor moods → Mess Hall, 3 outdoor → Forest,
+    backed by step 34's real flip data for `dreamlike`/`thriller`).
+    `TestRoom` dropped from eval scope entirely (decided live with
+    Eran, confirmed again when asked to reconsider — bare plane+cube,
+    no atmosphere to test a mood against). First capture against Mess
+    Hall crashed: `Lightmapping.lightingSettings` THROWS when no
+    LightingSettings asset is assigned, it doesn't return null — the
+    existing null-check never ran. Fixed with try/catch. Verified live:
+    `horror` (Mess Hall) and `golden_hour` (Forest) both ran correctly
+    against their assigned scenes in one suite invocation.
+
+39. **Judge: reasoning-first field order in structured output.**
+    `docs/agent-output-quality-techniques.md` records the full
+    technique and why it actually works (autoregressive generation —
+    field order in a schema IS generation order, so a reasoning field
+    before the score conditions the score on real observations instead
+    of the model justifying an already-decided number). `MoodJudgement.
+    notes` (last, "debugging only") renamed to `reasoning` and moved
+    first; judge instructions updated to require that order explicitly.
+    Verified live: reasoning came back with specific, concrete visual
+    observations, not generic filler; horror/golden_hour both passed on
+    re-run. Deliberately NOT applied to the lighting agent — it has no
+    `output_type` (tool-calling, not structured output), so the
+    technique doesn't translate the same way; holding off on any
+    equivalent there until there's observed evidence its decisions
+    need more deliberation, not speculatively.
+
 ---
 
 ## Open questions / not yet decided
