@@ -1,12 +1,12 @@
 [
-  {"name": "horror", "task": "apply a horror mood vibe to this scene - dark, ominous, cold, strong contrast"},
-  {"name": "eerie_lab", "task": "eerie abandoned sci-fi lab mood - quiet, unsettling, dim emergency lighting, sense of something wrong"},
-  {"name": "golden_hour", "task": "warm golden hour sunlight mood"},
-  {"name": "cozy_cafe", "task": "cozy, warm, inviting mood - like a cafe or living room"},
-  {"name": "thriller", "task": "tense sci-fi thriller mood - cold, isolated, high contrast, something lurking nearby"},
-  {"name": "dreamlike", "task": "dreamlike mood - soft, hazy, otherworldly, slightly surreal"},
-  {"name": "festive", "task": "festive holiday party mood - bright, colorful, celebratory, warm and cheerful"},
-  {"name": "post_apocalyptic", "task": "post-apocalyptic mood - desolate, grim, harsh, abandoned feeling"},
-  {"name": "zen", "task": "serene zen meditation mood - minimal, soft, balanced, tranquil"},
-  {"name": "noir", "task": "dramatic noir detective mood - stark shadows, moody, high contrast black and white feel"}
+  {"name": "horror", "task": "apply a horror mood vibe to this scene - dark, ominous, cold, strong contrast", "scene": "Assets/room/Cosmic_Retro_MessHall_Props_FREE/Demo_Scene/Cosmic_Retro_Mesa_Props_Free.unity"},
+  {"name": "eerie_lab", "task": "eerie abandoned sci-fi lab mood - quiet, unsettling, dim emergency lighting, sense of something wrong", "scene": "Assets/room/Cosmic_Retro_MessHall_Props_FREE/Demo_Scene/Cosmic_Retro_Mesa_Props_Free.unity"},
+  {"name": "golden_hour", "task": "warm golden hour sunlight mood", "scene": "Assets/InnerverseInteractive/Ultimate Nature – Starter/Demo/Scenes/Forest/UNS_Demo.unity"},
+  {"name": "cozy_cafe", "task": "cozy, warm, inviting mood - like a cafe or living room", "scene": "Assets/room/Cosmic_Retro_MessHall_Props_FREE/Demo_Scene/Cosmic_Retro_Mesa_Props_Free.unity"},
+  {"name": "thriller", "task": "tense sci-fi thriller mood - cold, isolated, high contrast, something lurking nearby", "scene": "Assets/room/Cosmic_Retro_MessHall_Props_FREE/Demo_Scene/Cosmic_Retro_Mesa_Props_Free.unity"},
+  {"name": "dreamlike", "task": "dreamlike mood - soft, hazy, otherworldly, slightly surreal", "scene": "Assets/InnerverseInteractive/Ultimate Nature – Starter/Demo/Scenes/Forest/UNS_Demo.unity"},
+  {"name": "festive", "task": "festive holiday party mood - bright, colorful, celebratory, warm and cheerful", "scene": "Assets/room/Cosmic_Retro_MessHall_Props_FREE/Demo_Scene/Cosmic_Retro_Mesa_Props_Free.unity"},
+  {"name": "post_apocalyptic", "task": "post-apocalyptic mood - desolate, grim, harsh, abandoned feeling", "scene": "Assets/room/Cosmic_Retro_MessHall_Props_FREE/Demo_Scene/Cosmic_Retro_Mesa_Props_Free.unity"},
+  {"name": "zen", "task": "serene zen meditation mood - minimal, soft, balanced, tranquil", "scene": "Assets/InnerverseInteractive/Ultimate Nature – Starter/Demo/Scenes/Forest/UNS_Demo.unity"},
+  {"name": "noir", "task": "dramatic noir detective mood - stark shadows, moody, high contrast black and white feel", "scene": "Assets/room/Cosmic_Retro_MessHall_Props_FREE/Demo_Scene/Cosmic_Retro_Mesa_Props_Free.unity"}
 ]

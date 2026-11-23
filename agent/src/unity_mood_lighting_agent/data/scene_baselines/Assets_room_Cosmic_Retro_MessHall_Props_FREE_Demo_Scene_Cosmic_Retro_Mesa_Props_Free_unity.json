@@ -1,0 +1,54 @@
+{
+  "lights": [
+    {
+      "instance_id": "568105584918952190",
+      "name": "Point Light (4)",
+      "mode": "Realtime",
+      "type": "Point",
+      "intensity": 2.17,
+      "color_r": 1,
+      "color_g": 1,
+      "color_b": 1,
+      "range": 4.13
+    },
+    {
+      "instance_id": "568105584918952210",
+      "name": "Point Light (3)",
+      "mode": "Realtime",
+      "type": "Point",
+      "intensity": 0.81,
+      "color_r": 0.619607866,
+      "color_g": 0.9960785,
+      "color_b": 0.9960785,
+      "range": 1.77
+    }
+  ],
+  "reflection_probes": [],
+  "skybox_material_path": "Assets/HDRIs/Materials/noon_grass.mat",
+  "realtime_gi": false,
+  "baked_gi": false,
+  "scene_path": "Assets/room/Cosmic_Retro_MessHall_Props_FREE/Demo_Scene/Cosmic_Retro_Mesa_Props_Free.unity",
+  "color_adjustments": {
+    "post_exposure": 0.39,
+    "contrast": 17.6,
+    "saturation": 7.8,
+    "color_filter_r": 1.0,
+    "color_filter_g": 1.0,
+    "color_filter_b": 1.0
+  },
+  "vignette": {
+    "exists": false,
+    "intensity": 0.0,
+    "smoothness": 0.0
+  },
+  "fog": {
+    "enabled": true,
+    "color_r": 0.185653239,
+    "color_g": 0.213942066,
+    "color_b": 0.264150918,
+    "mode": "Linear",
+    "density": 0.06,
+    "start_distance": 17.68,
+    "end_distance": 86.31
+  }
+}

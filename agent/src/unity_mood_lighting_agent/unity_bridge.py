@@ -1007,13 +1007,17 @@ foreach (var p in probes) {
     probeInfo.Add(new { instance_id = p.gameObject.GetEntityId().ToString(), name = p.gameObject.name, mode = p.mode.ToString() });
 }
 string skyboxPath = UnityEngine.RenderSettings.skybox != null ? UnityEditor.AssetDatabase.GetAssetPath(UnityEngine.RenderSettings.skybox) : null;
-var ls = UnityEditor.Lightmapping.lightingSettings;
+bool realtimeGI = false, bakedGI = false;
+try {
+    var ls = UnityEditor.Lightmapping.lightingSettings;
+    if (ls != null) { realtimeGI = ls.realtimeGI; bakedGI = ls.bakedGI; }
+} catch { }
 return new {
     lights = lightInfo,
     reflection_probes = probeInfo,
     skybox_material_path = skyboxPath,
-    realtime_gi = ls != null ? ls.realtimeGI : false,
-    baked_gi = ls != null ? ls.bakedGI : false
+    realtime_gi = realtimeGI,
+    baked_gi = bakedGI
 };
 """.strip()
 

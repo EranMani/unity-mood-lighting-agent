@@ -63,6 +63,12 @@ def print_summary(case_names: list[str]) -> None:
 
 
 async def run_suite(only: list[str] | None = None, scene_path: str | None = None) -> None:
+    """scene_path, if given via --scene, OVERRIDES every case's own scene
+    (useful for a one-off ad-hoc run against a specific scene). Normally
+    omitted — each case runs against the scene assigned to it in
+    eval_suite.json (indoor moods -> Mess Hall, outdoor moods -> Forest;
+    TestRoom dropped from eval scope entirely, decided live with Eran —
+    bare plane+cube, no atmosphere to actually test a mood against)."""
     suite = _load_suite()
     if only:
         suite = [c for c in suite if c["name"] in only]
@@ -71,8 +77,9 @@ async def run_suite(only: list[str] | None = None, scene_path: str | None = None
             print(f"Unknown case name(s), skipping: {missing}")
 
     for case in suite:
-        print(f"\n=== Running case: {case['name']} ===")
-        output = await run(case["task"], case_name=case["name"], scene_path=scene_path)
+        case_scene = scene_path or case.get("scene")
+        print(f"\n=== Running case: {case['name']} (scene: {case_scene}) ===")
+        output = await run(case["task"], case_name=case["name"], scene_path=case_scene)
         print(output)
 
     print_summary([c["name"] for c in suite])
