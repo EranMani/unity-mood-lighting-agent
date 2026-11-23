@@ -267,3 +267,55 @@ lever that could move 4 of the 6 currently-failing cases, and this
 session just spent two real fixes (light-stacking, post-processing
 contamination) ruling out the two most likely "it's just orchestration
 noise" explanations for them.
+
+## Business reframe: lights/rendering-only, no geometry — v5 killed (2026-11-20)
+
+Eran reframed the business problem explicitly (verbatim): "I don't
+want to add new geometry or new props so far... I want to focus on the
+lighting agent only so we need to work with what we have in the scene."
+This kills v5 (scene/content transformation) as a direction entirely,
+not just parks it — the 4 "content ceiling" fails from the previous
+section are now the actual product boundary to push against with
+lighting/rendering alone, not evidence to go build geometry tools.
+
+Everything below this point is organized the way Eran asked going
+forward: **every tuning change gets a dated entry recording what
+changed, why, and the measured before/after** — progress or regression,
+not just "we tried something." No more ad-hoc notes without a verdict.
+
+### Change log
+
+| Date | Change | Rationale | Case(s) tested | Score before → after | Verdict |
+|---|---|---|---|---|---|
+| 2026-11-20 | Eval suite split per scene (`eval_suite.json` scene field, `eval.py` per-case scene) + fixed a `Lightmapping.lightingSettings` crash (throws instead of returning null when unassigned) | Testing every mood against one scene was conflating "mood impossible" with "wrong scene for this mood" | Full 10-case suite | 4/10 (Mess-Hall-only) and 5/10 (Forest-only) → **7/10** (scene-matched) | **Progress** — real, not noise: thriller/dreamlike specifically flip based on scene fit, matching the hypothesis |
+| 2026-11-20 | Judge `MoodJudgement.notes` → `reasoning`, moved FIRST (reasoning-then-score instead of score-then-rationalize); see `docs/agent-output-quality-techniques.md` for the full mechanism | Field order is generation order in structured output — forcing a description before the number grounds the score in real observations | horror, golden_hour (smoke test) | horror 5/10 FAIL → 6/10 PASS (same scene state, one more run) | **Inconclusive on its own** — flagged honestly at the time: 1 data point, this project has documented real non-determinism right at the pass boundary, can't attribute the flip to this change alone |
+| 2026-11-20 | Judge instructions: explicit scope language — score atmosphere given existing geometry, do NOT deduct for missing props/decorations/debris that would require adding geometry | The judge's own prior reasoning for eerie_lab/festive/post_apocalyptic literally cited "no gifts," "no debris," "no wreckage" — scoring against a target lighting alone can never reach, regardless of agent skill. A real miscalibration, not grade inflation | eerie_lab, festive, post_apocalyptic | eerie_lab 5→6, post_apocalyptic 2→6, festive 3→4 | **Progress on 2/3** — see below |
+| 2026-11-20 | Agent instructions: explicit "sell the feeling, not the content" strategy + push for committed/extreme values instead of timid nudges + multiple colored lights for colorful moods + combine levers together | Agent was likely under-using its own toolset (moderate, safe parameter choices) rather than genuinely hitting a wall | eerie_lab, festive, post_apocalyptic (same run as above, both changes landed together) | (combined with judge recalibration above) | **Progress on 2/3**, see below — can't fully separate which of the two changes (judge vs agent) mattered more for eerie_lab/post_apocalyptic, both landed in the same commit before the re-test |
+
+### Result of the judge-recalibration + agent-push combo
+
+| Case | Before | After | Verdict |
+|---|---|---|---|
+| eerie_lab | FAIL 5/10 | **PASS 6/10** | Progress |
+| post_apocalyptic | FAIL 2/10 | **PASS 6/10** (first attempt) | Progress |
+| festive | FAIL 3/10 | FAIL 4/10, but attempts got WORSE across retries (5→5→4) | Still stuck — see below |
+
+Projected full-suite result: **9/10** (up from 7/10 earlier the same
+session, 4/10 at session start).
+
+### New finding: post_apocalyptic's "pass" on re-test was actually a near-black frame (screenshot pipeline caught this)
+
+Built a before/after screenshot pipeline this session (`screenshots/<case>/baseline.png` + `result.png`, root of the repo per Eran's call — see README for the mechanism) specifically so results could be checked visually, not just trusted from a text score. First real payoff: re-ran `post_apocalyptic` again after the above changes and it actually **FAILED this time** (5/10, flipped from the 6/10 pass moments earlier — more of the same documented non-determinism). Looked at the actual `result.png`: it is **almost pure black, no scene content visible at all** — the agent had pushed exposure/vignette/fog so far that there's nothing left to read as any mood, "post-apocalyptic" or otherwise. The judge's own reasoning called this out correctly ("reads more as an exposure/visibility issue"), which is a good sign the recalibrated judge is still a strict, honest critic — it isn't just rubber-stamping dark images as "grim," it penalizes losing the image entirely.
+
+**Real open question, not yet decided**: should there be a guardrail preventing the agent from driving exposure/vignette/fog to the point where the scene goes effectively black? This is the "push for committed/extreme values" instruction from the change above potentially working too well without a floor. Not built yet — flagging as a candidate, not assuming it's needed, consistent with this project's "don't guardrail what you haven't observed" rule — this is now observed once.
+
+### `festive` — the one still-stuck case, worth tracking closely
+
+Retries made it WORSE, not better (5/10 → 5/10 → 4/10), while adding
+more differently-colored lights each time per the new instructions.
+Judge's own words: "reads more like a stylized retro room... no sense
+of party energy, sparkling, festivity." This may be a genuine edge of
+what pure lighting can sell (no amount of light color conjures
+sparkle/ornament shapes), or it may be that the retry-feedback loop
+itself isn't actually helping this specific case (same symptom, no new
+strategy attempt-to-attempt) — not yet determined which.

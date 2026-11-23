@@ -24,6 +24,7 @@ Usage:
 
 import asyncio
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,7 +48,9 @@ from unity_mood_lighting_agent.unity_bridge import (
 load_dotenv()
 
 MAX_ATTEMPTS = 3
-LOG_PATH = Path(__file__).resolve().parents[3] / "mood_test_log.jsonl"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+LOG_PATH = REPO_ROOT / "mood_test_log.jsonl"
+SCREENSHOTS_DIR = REPO_ROOT / "screenshots"
 
 
 def _log_result(task: str, attempts_used: int, passed: bool, judgement, case_name: str | None = None) -> None:
@@ -64,6 +67,11 @@ def _log_result(task: str, attempts_used: int, passed: bool, judgement, case_nam
     }
     with open(LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
+
+
+def _slugify(task: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", task.lower()).strip("_")
+    return slug[:40] or "adhoc"
 
 
 async def run(task: str, case_name: str | None = None, scene_path: str | None = None) -> str:
@@ -89,6 +97,16 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
         f"{readiness['probe_count']} probe(s) ({readiness['probes_fixed']} set to Realtime), "
         f"volume_created={readiness['volume_created']}, baseline_light_created={readiness['baseline_light_created']}"
     )
+
+    # Screenshot pair for visual before/after comparison — root-level
+    # screenshots/<case>/ so they're easy to find outside the Python
+    # package (Eran's call: root repo folder, not buried under agent/src).
+    # Named by case_name when run through eval.py; ad-hoc main.py calls
+    # fall back to a slug of the task text so they still get a folder.
+    shot_dir = SCREENSHOTS_DIR / (case_name or _slugify(task))
+    shot_dir.mkdir(parents=True, exist_ok=True)
+    baseline_shot = capture_game_view(output_path=str(shot_dir / "baseline.png"))
+    print(f"[screenshot] baseline saved: {baseline_shot.path}")
 
     feedback = ""  # judge's notes from the previous failed attempt, if any
 
@@ -135,11 +153,15 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
 
             if passed:
                 _log_result(task, attempt, True, judgement, case_name)
+                result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))
+                print(f"[screenshot] result saved: {result_shot.path}")
                 return f"Success on attempt {attempt}: {judgement.reasoning}"
 
             feedback = judgement.reasoning
             if attempt == MAX_ATTEMPTS:
                 _log_result(task, attempt, False, judgement, case_name)
+                result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))
+                print(f"[screenshot] result saved: {result_shot.path}")
                 return f"Gave up after {MAX_ATTEMPTS} attempts. Last judge score={judgement.mood_match_score}: {judgement.reasoning}"
 
     raise AssertionError("unreachable: loop always returns on its last iteration")

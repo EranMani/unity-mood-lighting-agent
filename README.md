@@ -510,6 +510,36 @@ product boundary is in the right place.
     equivalent there until there's observed evidence its decisions
     need more deliberation, not speculatively.
 
+40. **Judge scope recalibration + agent push + screenshot pipeline.**
+    Found the judge's own stated reasoning was citing missing physical
+    objects ("no gifts," "no debris," "no wreckage") as the reason
+    eerie_lab/festive/post_apocalyptic failed — a real miscalibration,
+    not an agent capability gap: scoring against a target lighting
+    alone can never reach regardless of skill. Fixed both sides at
+    once, per Eran's "option C" call: (a) judge instructions now
+    explicitly score atmosphere given the EXISTING geometry, never
+    deduct for missing props; (b) agent instructions now explicitly
+    push for committed/extreme values and combining all levers
+    together instead of timid, isolated nudges. Re-tested the 3 cases:
+    eerie_lab and post_apocalyptic flipped to PASS, festive stayed
+    FAIL (and got worse across retries — flagged as a real open
+    question, not yet resolved). Full results + the change-log table
+    discipline going forward: `docs/mood-test-results.md`.
+
+    Also built a before/after screenshot pipeline: `main.py`'s `run()`
+    now saves `screenshots/<case_name>/baseline.png` (captured right
+    after `ensure_scene_ready()`, before the agent touches anything)
+    and `screenshots/<case_name>/result.png` (captured at the final
+    attempt, pass or give-up) — root of the repo, not buried under
+    `agent/src`, per Eran's call so they're easy to find. Ad-hoc
+    `main.py` calls without a `--case` get a slugified-task folder name
+    instead. First real payoff: caught that a "passing" post_apocalyptic
+    re-run had actually gone to a near-black frame on a later run —
+    the judge correctly penalized it, but seeing the actual image is
+    what made it obvious this was a real failure mode (over-darkening
+    past the point of any content being visible), not just a score
+    number to trust blindly.
+
 ---
 
 ## Open questions / not yet decided
