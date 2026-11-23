@@ -469,17 +469,17 @@ product boundary is in the right place.
     every placement path (`set_object_transform`/`aim_light_at` via
     `_apply_transform_with_guardrail`, `create_light`, `create_light_
     near`) — rejects any position outside the scene's real box on any
-    axis. Verified the primitive directly (clear pass/fail on an
-    obviously-outside position); the SDK's internal tool-invocation
-    plumbing resisted a direct call to the wrapped `@function_tool`
-    itself (same friction step 4 hit calling a decorated function
-    directly), so that specific path is verified by code-structure
-    match to the already-proven `count_lights()` cap check, not an
-    isolated live rejection test — worth a closer look if a future
-    mood test ever produces an out-of-bounds placement that doesn't
-    get rejected. A full pipeline run (zen mood) completed clean with
-    the new guardrail in place, confirming it doesn't break normal
-    operation at least.
+    axis. **Verified live through the actual wrapped tool, not just the
+    primitive or a code-structure argument:** the SDK's internal
+    tool-invocation plumbing initially resisted a bare stub context
+    (same friction step 4 hit calling a decorated function directly),
+    but constructing a real `agents.tool_context.ToolContext` (easy,
+    checked its actual constructor signature instead of assuming it was
+    unreachable) let `create_light.on_invoke_tool()` run exactly as the
+    agent would — a wildly out-of-range position was correctly rejected,
+    an in-bounds one created the light normally through the identical
+    code path. No real gap, just hadn't tried hard enough the first
+    time.
 
 ---
 
