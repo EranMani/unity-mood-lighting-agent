@@ -60,7 +60,7 @@ def _log_result(task: str, attempts_used: int, passed: bool, judgement, case_nam
         "mood_match_score": judgement.mood_match_score,
         "dominant_color_temp": judgement.dominant_color_temp,
         "contrast_level": judgement.contrast_level,
-        "notes": judgement.notes,
+        "notes": judgement.reasoning,
     }
     with open(LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
@@ -135,12 +135,12 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
 
             if passed:
                 _log_result(task, attempt, True, judgement, case_name)
-                return f"Success on attempt {attempt}: {judgement.notes}"
+                return f"Success on attempt {attempt}: {judgement.reasoning}"
 
-            feedback = judgement.notes
+            feedback = judgement.reasoning
             if attempt == MAX_ATTEMPTS:
                 _log_result(task, attempt, False, judgement, case_name)
-                return f"Gave up after {MAX_ATTEMPTS} attempts. Last judge score={judgement.mood_match_score}: {judgement.notes}"
+                return f"Gave up after {MAX_ATTEMPTS} attempts. Last judge score={judgement.mood_match_score}: {judgement.reasoning}"
 
     raise AssertionError("unreachable: loop always returns on its last iteration")
 

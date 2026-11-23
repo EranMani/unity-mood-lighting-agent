@@ -20,12 +20,20 @@ PASS_THRESHOLD = 6  # out of 10 — plain code decides this, not the LLM
 
 
 class MoodJudgement(BaseModel):
-    """Structured score for how well a captured scene matches a mood task."""
+    """Structured score for how well a captured scene matches a mood task.
+    reasoning is deliberately FIRST — same chain-of-thought-in-output
+    technique as reasoning-then-answer: generating the description of
+    what the image actually shows before committing to a number lets
+    that description condition the score, instead of the model jumping
+    straight to a number with no deliberation. Decided live with Eran,
+    2026-11-20 — this reframes/replaces the old 'notes' field, which was
+    positioned last and explicitly 'debugging only, not branched on',
+    exactly backwards from this technique."""
 
+    reasoning: str = Field(description="Describe what the image actually shows FIRST, before scoring — lighting, color, contrast, what does/doesn't support the requested mood. This is what the score below should be grounded in.")
     mood_match_score: int = Field(description="0-10, overall match to the requested mood.")
     dominant_color_temp: str = Field(description="warm, neutral, or cool.")
     contrast_level: str = Field(description="low, medium, or high.")
-    notes: str = Field(description="One or two lines of free-text reasoning. Debugging only, not branched on.")
 
 
 judge_agent = Agent(
@@ -35,7 +43,11 @@ judge_agent = Agent(
         "supposed to achieve (e.g. 'horror', 'cozy'). Score how well the "
         "image actually matches that mood. Be a strict, honest critic — "
         "do not assume the task succeeded just because lighting changed; "
-        "judge only what the image actually shows."
+        "judge only what the image actually shows. Write the 'reasoning' "
+        "field FIRST and let it describe what you actually see (lighting, "
+        "color, contrast, what does/doesn't support the mood) before you "
+        "decide the score — don't write the score first and justify it "
+        "afterward."
     ),
     model="gpt-5.4-mini",
     output_type=MoodJudgement,
