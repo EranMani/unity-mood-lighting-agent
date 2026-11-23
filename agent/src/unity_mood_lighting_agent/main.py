@@ -25,6 +25,7 @@ Usage:
 import asyncio
 import json
 import re
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,9 +55,17 @@ LOG_PATH = REPO_ROOT / "mood_test_log.jsonl"
 SCREENSHOTS_DIR = REPO_ROOT / "screenshots"
 
 
-def _log_result(task: str, attempts_used: int, passed: bool, judgement, case_name: str | None = None) -> None:
+def _log_result(
+    task: str,
+    attempts_used: int,
+    passed: bool,
+    judgement,
+    case_name: str | None = None,
+    run_timestamp: datetime | None = None,
+) -> None:
+    ts = run_timestamp or datetime.now(timezone.utc)
     entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": ts.isoformat(),
         "case_name": case_name,  # None for ad-hoc main.py calls; set when run via eval.py
         "task": task,
         "attempts_used": attempts_used,
@@ -70,13 +79,20 @@ def _log_result(task: str, attempts_used: int, passed: bool, judgement, case_nam
         f.write(json.dumps(entry) + "\n")
 
 
-def _log_guardrail_rejection(task: str, attempt: int, visibility, case_name: str | None = None) -> None:
+def _log_guardrail_rejection(
+    task: str,
+    attempt: int,
+    visibility,
+    case_name: str | None = None,
+    run_timestamp: datetime | None = None,
+) -> None:
     """Separate from _log_result — this is a guardrail catch, not a judge
     score. No MoodJudgement exists here (judge was never called, that's
     the whole point — save the LLM call on a frame with nothing to
     score)."""
+    ts = run_timestamp or datetime.now(timezone.utc)
     entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": ts.isoformat(),
         "case_name": case_name,
         "task": task,
         "attempts_used": attempt,
@@ -123,10 +139,27 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
     # package (Eran's call: root repo folder, not buried under agent/src).
     # Named by case_name when run through eval.py; ad-hoc main.py calls
     # fall back to a slug of the task text so they still get a folder.
-    shot_dir = SCREENSHOTS_DIR / (case_name or _slugify(task))
+    #
+    # Each run gets its OWN timestamped subfolder (decided live with
+    # Eran, 2026-11-23) — a plain overwrite was silently destroying
+    # history (couldn't see run N's screenshots once run N+1 happened to
+    # the same case). The timestamp is generated ONCE here and reused for
+    # both the folder name and the mood_test_log.jsonl entry — same
+    # value in both places means a screenshot folder can always be
+    # matched back to its exact log row with no extra bookkeeping field.
+    # Windows forbids ':' in filenames, so this uses a sanitized format,
+    # not a raw ISO string.
+    run_started_at = datetime.now(timezone.utc)
+    timestamp_slug = run_started_at.strftime("%Y%m%dT%H%M%SZ")
+    case_dir = SCREENSHOTS_DIR / (case_name or _slugify(task))
+    shot_dir = case_dir / timestamp_slug
     shot_dir.mkdir(parents=True, exist_ok=True)
+    latest_dir = case_dir / "latest"
+    latest_dir.mkdir(parents=True, exist_ok=True)
+
     baseline_shot = capture_game_view(output_path=str(shot_dir / "baseline.png"))
-    print(f"[screenshot] baseline saved: {baseline_shot.path}")
+    shutil.copyfile(baseline_shot.path, latest_dir / "baseline.png")
+    print(f"[screenshot] baseline saved: {baseline_shot.path} (+ latest/)")
 
     feedback = ""  # judge's notes from the previous failed attempt, if any
 
@@ -189,9 +222,10 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                     "color/contrast/shadow shape, not by erasing the image."
                 )
                 if attempt == MAX_ATTEMPTS:
-                    _log_guardrail_rejection(task, attempt, visibility, case_name)
+                    _log_guardrail_rejection(task, attempt, visibility, case_name, run_started_at)
                     result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))
-                    print(f"[screenshot] result saved: {result_shot.path}")
+                    shutil.copyfile(result_shot.path, latest_dir / "result.png")
+                    print(f"[screenshot] result saved: {result_shot.path} (+ latest/)")
                     return (
                         f"Gave up after {MAX_ATTEMPTS} attempts. Final attempt was rejected by "
                         f"the visibility guardrail (frame unreadable: "
@@ -207,16 +241,18 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
             )
 
             if passed:
-                _log_result(task, attempt, True, judgement, case_name)
+                _log_result(task, attempt, True, judgement, case_name, run_started_at)
                 result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))
-                print(f"[screenshot] result saved: {result_shot.path}")
+                shutil.copyfile(result_shot.path, latest_dir / "result.png")
+                print(f"[screenshot] result saved: {result_shot.path} (+ latest/)")
                 return f"Success on attempt {attempt}: {judgement.reasoning}"
 
             feedback = judgement.reasoning
             if attempt == MAX_ATTEMPTS:
-                _log_result(task, attempt, False, judgement, case_name)
+                _log_result(task, attempt, False, judgement, case_name, run_started_at)
                 result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))
-                print(f"[screenshot] result saved: {result_shot.path}")
+                shutil.copyfile(result_shot.path, latest_dir / "result.png")
+                print(f"[screenshot] result saved: {result_shot.path} (+ latest/)")
                 return f"Gave up after {MAX_ATTEMPTS} attempts. Last judge score={judgement.mood_match_score}: {judgement.reasoning}"
 
     raise AssertionError("unreachable: loop always returns on its last iteration")

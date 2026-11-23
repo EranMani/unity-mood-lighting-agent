@@ -19,7 +19,7 @@ vignette, fog, skybox) → a judge agent scores the result against the mood
 
 | Before | After (`"apply a post-apocalyptic mood"`) |
 |---|---|
-| ![baseline](screenshots/post_apocalyptic/baseline.png) | ![result](screenshots/post_apocalyptic/result.png) |
+| ![baseline](screenshots/post_apocalyptic/latest/baseline.png) | ![result](screenshots/post_apocalyptic/latest/result.png) |
 
 ## Status
 
@@ -99,7 +99,10 @@ uv run python src/unity_mood_lighting_agent/main.py "apply a cozy mood" --scene 
 ```
 
 Every run appends to `mood_test_log.jsonl` and saves a before/after
-screenshot pair to `screenshots/<case_name>/`.
+screenshot pair to `screenshots/<case_name>/<timestamp>/` — a new
+timestamped folder every run, never overwritten, plus a `latest/` copy
+kept in sync for stable links (used by this README's demo above). The
+timestamp matches the corresponding `mood_test_log.jsonl` entry exactly.
 
 ## Project structure
 
