@@ -162,6 +162,7 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
     print(f"[screenshot] baseline saved: {baseline_shot.path} (+ latest/)")
 
     feedback = ""  # judge's notes from the previous failed attempt, if any
+    attempt_history: list[dict] = []  # every prior attempt's own summary + score, oldest first
 
     with trace(
         workflow_name="mood_lighting_agent",
@@ -171,10 +172,26 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
         print(f"[trace] https://platform.openai.com/traces/trace?trace_id={t.trace_id}")
         for attempt in range(1, MAX_ATTEMPTS + 1):
             prompt_text = f"Current scene objects:\n{get_scene_context()}\n\nTask: {task}"
+            if attempt_history:
+                history_lines = "\n".join(
+                    f"- Attempt {h['attempt']}: you did \u2014 {h['action']} \u2192 judge score {h['score']}/10. "
+                    f"Judge said: {h['notes']}"
+                    for h in attempt_history
+                )
+                prompt_text += f"\n\nPrevious attempts this run (oldest first):\n{history_lines}"
+                scores = [h["score"] for h in attempt_history]
+                if len(scores) >= 2 and scores[-1] <= scores[-2]:
+                    prompt_text += (
+                        "\n\nNOTE: your score did NOT improve (or got worse) on the last "
+                        "attempt despite the change you made. Pushing the same lever "
+                        "harder is not working \u2014 try a DIFFERENT lever this time (e.g. if "
+                        "you've been adding/intensifying lights, try color grading/vignette/"
+                        "fog instead, or vice versa; or change composition \u2014 fewer, more "
+                        "deliberate color choices instead of more lights)."
+                    )
             if feedback:
                 prompt_text += (
-                    f"\n\nA previous attempt did not achieve this mood. Judge feedback: {feedback}\n"
-                    "Adjust your approach based on this feedback."
+                    f"\n\nThe scene just went nearly black/unreadable. {feedback}"
                 )
 
             # Capture the CURRENT live state as a visual starting point —
@@ -234,6 +251,7 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                 continue  # skip the judge entirely, retry without burning that call
 
             passed, judgement = await judge_mood_match(task)
+            feedback = ""  # guardrail message (if any) consumed by this attempt, clear it
 
             print(
                 f"[attempt {attempt}/{MAX_ATTEMPTS}] agent: {result.final_output} | "
@@ -247,7 +265,14 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                 print(f"[screenshot] result saved: {result_shot.path} (+ latest/)")
                 return f"Success on attempt {attempt}: {judgement.reasoning}"
 
-            feedback = judgement.reasoning
+            attempt_history.append(
+                {
+                    "attempt": attempt,
+                    "action": result.final_output,
+                    "score": judgement.mood_match_score,
+                    "notes": judgement.reasoning,
+                }
+            )
             if attempt == MAX_ATTEMPTS:
                 _log_result(task, attempt, False, judgement, case_name, run_started_at)
                 result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))

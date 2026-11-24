@@ -24,6 +24,7 @@ from unity_mood_lighting_agent.tools import (
 from unity_mood_lighting_agent.unity_bridge import (
     get_color_adjustments,
     get_fog,
+    get_light_properties,
     get_scene_bounds,
     get_vignette,
     list_scene_transforms,
@@ -114,6 +115,14 @@ def get_scene_context() -> str:
         f"- {o.name} (instance_id={o.instance_id}): "
         f"pos=({o.pos_x}, {o.pos_y}, {o.pos_z}), "
         f"rot=({o.rot_x}, {o.rot_y}, {o.rot_z})"
+        + (
+            f", LIGHT intensity={(lp := get_light_properties(o.instance_id)).intensity}, "
+            f"color=({lp.color_r}, {lp.color_g}, {lp.color_b}), "
+            f"color_temperature={lp.color_temperature}K, "
+            f"bounce_intensity={lp.bounce_intensity}"
+            if o.is_light
+            else ""
+        )
         for o in scene
     )
 

@@ -304,6 +304,8 @@ can't be trusted for sequencing later.
 | 2026-11-23 | Checked `ModelSettings.reasoning` live (`dataclasses.fields`) and grepped the codebase | Wanted to know if either agent has any hidden deliberation happening before touching anything speculatively | n/a (investigation only) | Confirmed: defaults to `None`, zero occurrences in `agent.py`/`judge.py` — neither agent has ever configured it | **Decision, not a tuning change yet** — documented in `docs/agent-output-quality-techniques.md`; holding off on touching it until the full suite re-run shows a problem specifically needing more reasoning effort to fix |
 | 2026-11-23 | Built `check_frame_visibility()` (pure PIL pixel check, no LLM) + wired into `main.py`'s attempt loop BEFORE the judge call — if a frame is near-black, skip the judge entirely and feed back directly, no model call spent on a frame with nothing to score | Per-field value clamps can't catch this: the near-black frame wasn't any single field out of Unity's own legal range, it was a COMPOUND effect of several individually-reasonable changes stacking. Calibrated thresholds (mean_brightness<10 or >90% near-black pixels) against the two real images on file: bad frame measured 4.1/255 + 98.8% near-black, normal frame measured 86.5/255 + 0.2% | post_apocalyptic (re-run didn't trigger it — agent passed clean on attempt 1 this time); branch logic verified directly against the real stored black-frame image | N/A (guardrail, not a scoring tune) | **Built and unit-verified, not yet caught live in a full run** — honest gap: haven't yet observed it fire during an actual attempt loop, only proven the detection function and the logging/feedback code path work correctly in isolation |
 | 2026-11-23 | Fixed `screenshots/<case>/` silently overwriting baseline.png/result.png on every run (Eran caught it) — each run now gets its own `screenshots/<case>/<timestamp>/` folder, plus a `latest/` copy kept in sync for stable links (README's demo image). Timestamp is generated once and reused for both the folder name and the matching `mood_test_log.jsonl` entry, so any screenshot set can be matched back to its exact log row with no extra field | A plain overwrite was destroying history — couldn't see run N's screenshots once run N+1 happened for the same case. Considered a version-number counter instead, rejected: needs a disk scan to find "next", fragile if a folder's ever deleted | horror (smoke test) | N/A (infra, not a scoring tune) | **Verified live**: folder `20261123T092904Z` created, timestamp matched the log entry's `2026-11-23T09:29:04...` to the second, `latest/` populated correctly |
+| 2026-11-23 | **Fix 1**: `get_scene_context()` now reads and reports each light's real `intensity`/`color`/`color_temperature`/`bounce_intensity` (via `get_light_properties()`), not just position/rotation. Previously the agent was blind to its own lights' actual values across attempts, position/rotation was ALL `get_scene_context()` exposed for any object, lights included. Required tagging `is_light` on every object in the C# transform-read script | Investigating `festive`'s stuck 5→5→4 regression from the previous session — hypothesis: agent couldn't see what it had already set on its own lights, so it could only reason about NEW lights, not adjust existing ones | festive, 3 fresh runs | Baseline (pre-fix, this session): 7 PASS / 6 PASS / 5 FAIL. Post-fix: 5 FAIL / 6 PASS / 5 FAIL | **No improvement in pass rate** (2/3 → 1/3), but a real, legitimate blind-spot fix kept regardless of this specific result — correct bookkeeping the agent should have had from the start |
+| 2026-11-23 | **Fix 2**: `main.py`'s retry loop now accumulates a structured `attempt_history` (every prior attempt's own action summary + judge score + judge notes, oldest first) and feeds the full history into every subsequent attempt's prompt, with an explicit "your score did not improve, try a DIFFERENT lever" nudge when the last two scores are flat or declining. Replaces the old single-attempt `feedback` string (judge notes only, no scores, no history, overwritten every attempt) | Eran's hypothesis: the agent sees the latest judge note but has no visibility into its OWN prior values or whether its last change even helped, so it can't tell "pushing harder" from "trying something different" | festive, 3 fresh runs (on top of fix 1) | 4 FAIL / 6 PASS / 5 FAIL | **No improvement in pass rate** (still ~1/3), scores stayed in the same 3-7 band as every other run this session — kept anyway, it's objectively better-informed plumbing, just not festive's actual bottleneck |
 
 ### Result of the judge-recalibration + agent-push combo
 
@@ -322,13 +324,42 @@ Built a before/after screenshot pipeline this session (`screenshots/<case>/basel
 
 **Real open question, not yet decided**: should there be a guardrail preventing the agent from driving exposure/vignette/fog to the point where the scene goes effectively black? This is the "push for committed/extreme values" instruction from the change above potentially working too well without a floor. Not built yet — flagging as a candidate, not assuming it's needed, consistent with this project's "don't guardrail what you haven't observed" rule — this is now observed once.
 
-### `festive` — the one still-stuck case, worth tracking closely
+### `festive` — resolved as threshold noise, not a content ceiling or a broken retry loop
 
-Retries made it WORSE, not better (5/10 → 5/10 → 4/10), while adding
-more differently-colored lights each time per the new instructions.
-Judge's own words: "reads more like a stylized retro room... no sense
-of party energy, sparkling, festivity." This may be a genuine edge of
-what pure lighting can sell (no amount of light color conjures
-sparkle/ornament shapes), or it may be that the retry-feedback loop
-itself isn't actually helping this specific case (same symptom, no new
-strategy attempt-to-attempt) — not yet determined which.
+Retried the investigation this session with two targeted fixes (see change
+log above): light-property visibility (fix 1) and structured per-attempt
+history + a "you plateaued, try a different lever" nudge (fix 2). Ran
+festive 3 fresh times at baseline and after each fix (9 runs total):
+
+| | Run 1 | Run 2 | Run 3 | Pass rate |
+|---|---|---|---|---|
+| Baseline | 7 PASS | 6 PASS | 5 FAIL | 2/3 |
+| Fix 1 (light visibility) | 5 FAIL | 6 PASS | 5 FAIL | 1/3 |
+| Fix 2 (history + plateau nudge) | 4 FAIL | 6 PASS | 5 FAIL | 1/3 |
+
+**Conclusion**: all 9 runs landed in the same 3-7 score band, right on
+the pass threshold of 6, regardless of which fix was active. Neither fix
+moved the pass rate. This rules out both standing hypotheses from the
+previous session (genuine content ceiling, and a non-adapting retry
+loop) as THE explanation — festive is a threshold-noise case, same
+bucket as `eerie_lab`/`noir`/`post_apocalyptic` documented earlier in
+this doc (pass/fail flips run-to-run with zero code changes). This also
+resolves the "Parked idea: diff-with-outcome tracking" section earlier
+in this doc — it got built (fix 2) once evidence existed, and the honest
+result is it doesn't fix THIS failure mode; multi-trial averaging is the
+remaining real lever for borderline cases like this one, not more
+feedback-loop tuning.
+
+Both fixes are kept in the codebase regardless of the null result —
+light-property visibility was a real, pre-existing blind spot (correct
+to fix on its own merits), and the structured history is objectively
+better-informed plumbing than the single-string feedback it replaced.
+
+**New, separate finding (not yet investigated)**: during fix 2's runs,
+the agent twice returned a bare `"Done."` as its `final_output` with no
+description of what it actually changed (attempts 2 and 3 of the first
+fix-2 run). Scores still moved that run (5→5→4), so tool calls did
+happen, the agent just stopped narrating. This weakens the value of any
+history/feedback mechanism, including fix 2's, since the history entry
+for that attempt is uninformative. Flagged for a separate discussion,
+not fixed in this pass.

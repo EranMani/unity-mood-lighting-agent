@@ -75,7 +75,7 @@ bool HasColliderAnywhere(UnityEngine.Transform t) {
 }
 object Entry(UnityEngine.Transform t) {
   var p = t.position; var r = t.eulerAngles;
-  return new { instance_id = t.gameObject.GetEntityId().ToString(), name = t.gameObject.name, pos_x = p.x, pos_y = p.y, pos_z = p.z, rot_x = r.x, rot_y = r.y, rot_z = r.z };
+  return new { instance_id = t.gameObject.GetEntityId().ToString(), name = t.gameObject.name, pos_x = p.x, pos_y = p.y, pos_z = p.z, rot_x = r.x, rot_y = r.y, rot_z = r.z, is_light = t.gameObject.GetComponent<UnityEngine.Light>() != null };
 }
 var list = new System.Collections.Generic.List<object>();
 foreach (var t in UnityEngine.Object.FindObjectsByType<UnityEngine.Transform>()) {
@@ -110,6 +110,7 @@ class ObjectTransform(BaseModel):
     rot_x: float = Field(description="Rotation around the X axis, in degrees.")
     rot_y: float = Field(description="Rotation around the Y axis, in degrees.")
     rot_z: float = Field(description="Rotation around the Z axis, in degrees.")
+    is_light: bool = Field(default=False, description="True if this object has a Light component.")
 
 
 def list_scene_transforms() -> list[ObjectTransform]:
