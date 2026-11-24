@@ -58,7 +58,12 @@ def print_summary(case_names: list[str]) -> None:
             continue
         status = "PASS" if entry["passed"] else "FAIL"
         passed_count += entry["passed"]
-        print(f"{name:20s} {status}  score={entry['mood_match_score']}/10  attempts={entry['attempts_used']}")
+        if entry.get("guardrail_rejected"):
+            # No judge was ever called for this case's final attempt —
+            # visibility guardrail rejected it, there is no mood_match_score.
+            print(f"{name:20s} {status}  guardrail_rejected={entry['guardrail_rejected']}  attempts={entry['attempts_used']}")
+        else:
+            print(f"{name:20s} {status}  score={entry['mood_match_score']}/10  attempts={entry['attempts_used']}")
     print(f"\n{passed_count}/{len(case_names)} passed")
 
 

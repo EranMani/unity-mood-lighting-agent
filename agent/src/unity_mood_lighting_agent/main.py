@@ -33,7 +33,7 @@ from pathlib import Path
 from agents import Runner, trace
 from dotenv import load_dotenv
 
-from unity_mood_lighting_agent.agent import agent, get_scene_context
+from unity_mood_lighting_agent.agent import LightingDecision, agent, get_scene_context
 from unity_mood_lighting_agent.judge import judge_mood_match
 from unity_mood_lighting_agent.tools import cleanup_agent_lights
 from unity_mood_lighting_agent.unity_bridge import (
@@ -214,6 +214,7 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
             ]
 
             result = await Runner.run(agent, prompt)
+            decision: LightingDecision = result.final_output
 
             # Guardrail: check the ACTUAL rendered pixels before paying
             # for the judge LLM call. Found live that per-field clamps
@@ -254,7 +255,10 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
             feedback = ""  # guardrail message (if any) consumed by this attempt, clear it
 
             print(
-                f"[attempt {attempt}/{MAX_ATTEMPTS}] agent: {result.final_output} | "
+                f"[attempt {attempt}/{MAX_ATTEMPTS}] agent archetype={decision.mood_breakdown.strategy_archetype.value} "
+                f"genre={decision.mood_breakdown.genre!r} "
+                f"contrast={decision.mood_breakdown.target_contrast.value} "
+                f"changes={decision.changes_summary} | "
                 f"judge score={judgement.mood_match_score} passed={passed}"
             )
 
@@ -268,7 +272,7 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
             attempt_history.append(
                 {
                     "attempt": attempt,
-                    "action": result.final_output,
+                    "action": decision.changes_summary,
                     "score": judgement.mood_match_score,
                     "notes": judgement.reasoning,
                 }

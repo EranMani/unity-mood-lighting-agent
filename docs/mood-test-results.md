@@ -306,6 +306,8 @@ can't be trusted for sequencing later.
 | 2026-11-23 | Fixed `screenshots/<case>/` silently overwriting baseline.png/result.png on every run (Eran caught it) — each run now gets its own `screenshots/<case>/<timestamp>/` folder, plus a `latest/` copy kept in sync for stable links (README's demo image). Timestamp is generated once and reused for both the folder name and the matching `mood_test_log.jsonl` entry, so any screenshot set can be matched back to its exact log row with no extra field | A plain overwrite was destroying history — couldn't see run N's screenshots once run N+1 happened for the same case. Considered a version-number counter instead, rejected: needs a disk scan to find "next", fragile if a folder's ever deleted | horror (smoke test) | N/A (infra, not a scoring tune) | **Verified live**: folder `20261123T092904Z` created, timestamp matched the log entry's `2026-11-23T09:29:04...` to the second, `latest/` populated correctly |
 | 2026-11-23 | **Fix 1**: `get_scene_context()` now reads and reports each light's real `intensity`/`color`/`color_temperature`/`bounce_intensity` (via `get_light_properties()`), not just position/rotation. Previously the agent was blind to its own lights' actual values across attempts, position/rotation was ALL `get_scene_context()` exposed for any object, lights included. Required tagging `is_light` on every object in the C# transform-read script | Investigating `festive`'s stuck 5→5→4 regression from the previous session — hypothesis: agent couldn't see what it had already set on its own lights, so it could only reason about NEW lights, not adjust existing ones | festive, 3 fresh runs | Baseline (pre-fix, this session): 7 PASS / 6 PASS / 5 FAIL. Post-fix: 5 FAIL / 6 PASS / 5 FAIL | **No improvement in pass rate** (2/3 → 1/3), but a real, legitimate blind-spot fix kept regardless of this specific result — correct bookkeeping the agent should have had from the start |
 | 2026-11-23 | **Fix 2**: `main.py`'s retry loop now accumulates a structured `attempt_history` (every prior attempt's own action summary + judge score + judge notes, oldest first) and feeds the full history into every subsequent attempt's prompt, with an explicit "your score did not improve, try a DIFFERENT lever" nudge when the last two scores are flat or declining. Replaces the old single-attempt `feedback` string (judge notes only, no scores, no history, overwritten every attempt) | Eran's hypothesis: the agent sees the latest judge note but has no visibility into its OWN prior values or whether its last change even helped, so it can't tell "pushing harder" from "trying something different" | festive, 3 fresh runs (on top of fix 1) | 4 FAIL / 6 PASS / 5 FAIL | **No improvement in pass rate** (still ~1/3), scores stayed in the same 3-7 band as every other run this session — kept anyway, it's objectively better-informed plumbing, just not festive's actual bottleneck |
+| 2026-11-24 | **Fix 3**: agent itself now returns structured output (`LightingDecision`), not free text — `mood_breakdown` (strategy_archetype, genre, target_contrast enum, key_visual_choices) generated FIRST, then `reasoning`, then REQUIRED `changes_summary`. Same reasoning-first technique already proven on the judge, extended one step earlier (commit to an interpretation of the mood before reasoning about tool calls) | Directly fixes an observed bug: the agent sometimes returned a bare `"Done."` with zero description, found during fix 2's runs, making the history mechanism useless for that attempt. Eran's framing: give the agent its own structured output instead of fighting one unstructured prompt to cover every mood | festive, 3 fresh runs | 4 FAIL / 5 FAIL / 4 FAIL | **"Done." bug fixed for good** (required field can't be empty) and `mood_breakdown` populated correctly every attempt, but **festive's pass rate got WORSE, not better** (0/3, down from ~1/3) — see root cause below |
+| 2026-11-24 | **Fix 4**: replaced the generic "pick ONE OR TWO primary levers, don't max everything" rule with 4 named `strategy_archetype` blocks (RESTRAINED / EXPANSIVE / SOFT_AMBIENT / NATURALISTIC), each a compact primary/secondary/avoid line (~35-45 words), covering lighting-strategy categories rather than a lookup table of literal mood strings (so unseen moods still classify into one of the 4 via the agent's own reasoning) | Root cause of fix 3's regression: the generic "1-2 levers" restraint rule is correct for RESTRAINED moods (horror/noir) but wrong for EXPANSIVE ones (festive) — festive's one strong baseline run (7 PASS) had used 4 simultaneous colored lights, which the generic restraint rule was actively discouraging. A literal per-mood dict was rejected (doesn't generalize to moods never seen); archetypes are the smallest set that generalizes | festive, 3 fresh runs | 4 FAIL / 4 FAIL / 6 PASS | **Recovered the multi-light color-chaos strategy** (agent correctly self-classified `expansive` and used 4-5 distinctly colored lights every attempt again) and pass rate returned to ~1/3, back in line with every other variant tried today |
 
 ### Result of the judge-recalibration + agent-push combo
 
@@ -324,42 +326,193 @@ Built a before/after screenshot pipeline this session (`screenshots/<case>/basel
 
 **Real open question, not yet decided**: should there be a guardrail preventing the agent from driving exposure/vignette/fog to the point where the scene goes effectively black? This is the "push for committed/extreme values" instruction from the change above potentially working too well without a floor. Not built yet — flagging as a candidate, not assuming it's needed, consistent with this project's "don't guardrail what you haven't observed" rule — this is now observed once.
 
-### `festive` — resolved as threshold noise, not a content ceiling or a broken retry loop
+### `festive` — full investigation: structured output, archetypes, and why none of it moved the pass rate
 
-Retried the investigation this session with two targeted fixes (see change
-log above): light-property visibility (fix 1) and structured per-attempt
-history + a "you plateaued, try a different lever" nudge (fix 2). Ran
-festive 3 fresh times at baseline and after each fix (9 runs total):
+**Context for this section**: previous session left `festive` stuck at
+4/10 with retries getting WORSE (5→5→4). Two real, competing hypotheses
+were open: a genuine content ceiling (lighting literally can't sell
+"sparkle"), or the retry loop not actually adapting attempt-to-attempt.
+This session tested 5 genuinely different interventions, 3 fresh runs
+each (15 total), to find out.
 
-| | Run 1 | Run 2 | Run 3 | Pass rate |
+**Fix 1 — light-property visibility.** `get_scene_context()` only
+exposed position/rotation for every object, including lights — the
+agent had zero visibility into its OWN lights' intensity/color/
+color-temperature across attempts, only able to reason about brand-new
+lights, never adjust existing ones with real information. Fixed by
+tagging `is_light` on every object and reading real light properties via
+`get_light_properties()`. **Result: 5 FAIL / 6 PASS / 5 FAIL (1/3).** A
+real, legitimate blind-spot fix, kept regardless — but didn't move
+festive's pass rate.
+
+**Fix 2 — structured per-attempt history.** The retry loop only ever
+carried the latest judge note forward; it had no memory of what IT had
+tried before or whether that attempt even worked. Built `attempt_history`
+(action + score + judge notes per attempt, fed into every subsequent
+prompt) plus an explicit "your score plateaued, try a different lever"
+nudge. **Result: 4 FAIL / 6 PASS / 5 FAIL (1/3).** Same band, no
+improvement — but genuinely better-informed plumbing than what it
+replaced, kept anyway.
+
+**Fix 3 — structured output on the agent itself (Eran's framing: stop
+writing one prompt that tries to cover every mood; give the agent its
+own structured reasoning).** Added `LightingDecision` (`mood_breakdown`
+→ `reasoning` → REQUIRED `changes_summary`), same reasoning-first
+technique already proven on the judge (`MoodJudgement`), extended one
+step earlier: commit to an interpretation of the mood (genre, contrast
+enum, visual approach) before reasoning about tool calls, and a required
+field for what actually changed. **This fixed a real, separate bug**:
+the agent had twice returned a bare `"Done."` with zero description
+during fix 2's testing — tool calls still happened, the agent just
+stopped narrating, which made the fix-2 history useless for that
+attempt. A required Pydantic field can't be empty, so that bug is gone
+for good. **But festive's pass rate got WORSE: 4 FAIL / 5 FAIL / 4 FAIL
+(0/3)**, down from the ~1/3 every other variant landed at.
+
+**Root cause of the fix-3 regression, found by comparing transcripts**:
+the generic "pick ONE OR TWO primary levers, don't max everything at
+once" restraint rule (written to prevent the earlier near-black
+guardrail failures) is the right rule for RESTRAINED moods like horror
+and noir, but actively wrong for an EXPANSIVE mood like festive. The
+one standout baseline run this whole investigation started from (7 PASS,
+the best score festive ever got) used FOUR simultaneous distinctly
+colored lights (green rim, blue fill, gold sparkle, pink accent) — fix 3's
+restraint rule was quietly discouraging exactly that strategy, and the
+structured-output runs converged on a conservative one-warm-key +
+one-cyan-accent pattern every single attempt, barely varying.
+
+**Fix 4 — strategy archetypes instead of one universal rule (or a
+lookup table).** Eran's proposal, refined during discussion: don't try
+to write one instruction set that serves every mood (impossible — what
+works for horror actively hurts festive), and don't build a dict keyed
+by literal mood strings either (only covers moods already enumerated,
+never generalizes to something like "underwater alien ritual"). Instead,
+classify any mood into one of 4 closed lighting-strategy archetypes —
+RESTRAINED, EXPANSIVE, SOFT_AMBIENT, NATURALISTIC — each a compact
+primary-lever/secondary-lever/avoid line (~35-45 words, ~150-180 words
+total for all 4, small relative to the rest of the instructions). Added
+`strategy_archetype` as the first field of `mood_breakdown` (classified
+before genre/contrast, since it's the broadest call); the agent
+self-selects from the static list, no runtime prompt-assembly or extra
+API call needed. **Result: 4 FAIL / 4 FAIL / 6 PASS (1/3).** Confirmed
+live: the agent correctly classified festive as `expansive` every
+attempt and went back to using 4-5 distinctly colored lights per
+attempt — the suppressed strategy was restored. Pass rate recovered to
+the same ~1/3 band as every other non-regressed variant.
+
+### Full tally — 15 runs, 5 variants, one conclusion
+
+| Variant | Run 1 | Run 2 | Run 3 | Pass rate |
 |---|---|---|---|---|
-| Baseline | 7 PASS | 6 PASS | 5 FAIL | 2/3 |
-| Fix 1 (light visibility) | 5 FAIL | 6 PASS | 5 FAIL | 1/3 |
-| Fix 2 (history + plateau nudge) | 4 FAIL | 6 PASS | 5 FAIL | 1/3 |
+| Baseline (start of this session) | 7 PASS | 6 PASS | 5 FAIL | 2/3 |
+| Fix 1: light visibility | 5 FAIL | 6 PASS | 5 FAIL | 1/3 |
+| Fix 2: history + plateau nudge | 4 FAIL | 6 PASS | 5 FAIL | 1/3 |
+| Fix 3: structured output (no archetypes) | 4 FAIL | 5 FAIL | 4 FAIL | 0/3 |
+| Fix 4: structured output + archetypes | 4 FAIL | 4 FAIL | 6 PASS | 1/3 |
 
-**Conclusion**: all 9 runs landed in the same 3-7 score band, right on
-the pass threshold of 6, regardless of which fix was active. Neither fix
-moved the pass rate. This rules out both standing hypotheses from the
-previous session (genuine content ceiling, and a non-adapting retry
-loop) as THE explanation — festive is a threshold-noise case, same
-bucket as `eerie_lab`/`noir`/`post_apocalyptic` documented earlier in
-this doc (pass/fail flips run-to-run with zero code changes). This also
-resolves the "Parked idea: diff-with-outcome tracking" section earlier
-in this doc — it got built (fix 2) once evidence existed, and the honest
-result is it doesn't fix THIS failure mode; multi-trial averaging is the
-remaining real lever for borderline cases like this one, not more
-feedback-loop tuning.
+Every single score across all 15 runs landed between 2 and 7, median
+sitting right under the pass threshold of 6. **No architecture change
+tested this session — light-property visibility, structured
+per-attempt history, structured agent output, or strategy archetypes —
+shifted festive's underlying score distribution.** This is strong,
+repeated evidence that festive on this scene is genuine judge-threshold
+noise (same bucket as `eerie_lab`/`noir`/`post_apocalyptic` documented
+earlier in this doc), not a fixable prompt or architecture problem. This
+also closes the "Parked idea: diff-with-outcome tracking" section
+earlier in this doc — it got built (fix 2) once evidence existed, and
+the honest result across the whole investigation is that none of these
+interventions move a threshold-noise case; multi-trial averaging at the
+eval-harness level remains the real open lever for borderline cases,
+not more prompt/architecture tuning on this one mood.
 
-Both fixes are kept in the codebase regardless of the null result —
-light-property visibility was a real, pre-existing blind spot (correct
-to fix on its own merits), and the structured history is objectively
-better-informed plumbing than the single-string feedback it replaced.
+**What's being kept regardless of the null result on pass rate**, because
+each is independently correct or valuable:
+- Light-property visibility (fix 1) — a real, pre-existing blind spot.
+- Structured per-attempt history (fix 2) — objectively better-informed
+  plumbing than the single-string feedback it replaced.
+- Structured agent output with `reasoning` → `changes_summary` (fix 3)
+  — permanently fixes the `"Done."` empty-output bug.
+- Strategy archetypes (fix 4) — the one piece that generalizes beyond
+  festive specifically: any new, never-tested mood now gets classified
+  into a lighting strategy instead of fighting one-size-fits-all
+  instructions, which is the actual point of this round of work, not
+  festive's score.
 
-**New, separate finding (not yet investigated)**: during fix 2's runs,
-the agent twice returned a bare `"Done."` as its `final_output` with no
-description of what it actually changed (attempts 2 and 3 of the first
-fix-2 run). Scores still moved that run (5→5→4), so tool calls did
-happen, the agent just stopped narrating. This weakens the value of any
-history/feedback mechanism, including fix 2's, since the history entry
-for that attempt is uninformative. Flagged for a separate discussion,
-not fixed in this pass.
+**Important scope note**: everything above is evidence about ONE mood
+(festive) on ONE scene. The next real step is running the full 10-case
+suite with all of today's changes in place, to see the aggregate effect
+across every mood, not just the one that got the most attention this
+session (see below).
+
+## Full 10-case suite, run with all of today's changes in place (2026-11-24)
+
+All of today's work (fixes 1-4: light-property visibility, structured
+attempt history, structured agent output, strategy archetypes) targeted
+`festive` specifically. Festive's own pass rate never moved. But that's
+evidence about one mood on one scene — the real question is what these
+changes did to the suite as a whole.
+
+**Found and fixed a real harness bug first**: `eval.py`'s `print_summary()`
+assumed every logged row has a `mood_match_score`, but a case whose final
+attempt gets guardrail-rejected (near-black frame, judge never called)
+logs a different shape (`guardrail_rejected` instead of a score) — see
+`_log_guardrail_rejection()` in `main.py`. The full-suite run crashed with
+a `KeyError` on exactly this case (`post_apocalyptic`, see below). Fixed
+by branching the print on `entry.get("guardrail_rejected")`.
+
+**Result:**
+
+| Case | Score | Result |
+|---|---|---|
+| horror | 7/10 | PASS |
+| eerie_lab | 7/10 | PASS |
+| golden_hour | 7/10 | PASS |
+| cozy_cafe | 7/10 | PASS |
+| thriller | 7/10 | PASS |
+| dreamlike | 6/10 | PASS |
+| zen | 7/10 | PASS |
+| noir | 6/10 | PASS |
+| festive | 4/10 | FAIL |
+| post_apocalyptic | — (guardrail-rejected) | FAIL |
+
+**8/10 pass.** Up from 4/10 at the start of this session, and from 7/10
+earlier the same session (before the judge recalibration + archetype
+work). All 8 passes classified into a sensible archetype on attempt 1
+or 2 (`restrained` for horror/eerie_lab/thriller/noir, `soft_ambient` for
+cozy_cafe/zen/dreamlike, `naturalistic` for golden_hour) and several
+passed on the FIRST attempt (golden_hour, zen, noir) — no retries needed,
+a good sign the archetype + structured-output combination is giving the
+agent a usable, confident starting point instead of hunting around.
+
+**New finding: `post_apocalyptic` failed via the visibility guardrail
+firing LIVE for the first time**, not a low judge score. Classified
+correctly as `restrained` (desolate, grim, harsh — a real reading of the
+mood), and `restrained`'s own archetype guidance explicitly calls for
+"ONE dominant light direction + fog/vignette for shadow and isolation" —
+which is accurate advice that, pushed with the "commit with real
+conviction" instruction, drove attempt 3 to `mean_brightness=4.1/255,
+pct_near_black=100%`, rejected before a judge call was spent. This is
+exactly the "real open question, not yet decided" flagged earlier in
+this doc after the first near-black observation on `post_apocalyptic` —
+now observed a second time, and this time the guardrail's own feedback
+message (visible in the attempt log) is what should have told the agent
+to pull back, but attempt 3 was also the last attempt, so there was no
+attempt 4 to show whether it would have recovered. Still an open
+question whether a GUARDRAIL (code deciding a hard floor on
+exposure/vignette/fog combined) is warranted versus trusting the
+feedback loop to self-correct given one more attempt — not built,
+flagging again rather than guessing.
+
+**Honest summary for this whole session's festive investigation**: five
+different architecture interventions (light visibility, attempt history,
+structured output, strategy archetypes) were tested specifically to fix
+one stuck mood, and none of them moved that one mood's pass rate — it's
+threshold noise, confirmed by 15 runs. But the SAME changes, measured
+against the full suite rather than the one case that prompted them,
+produced a real, measurable net improvement (4/10 → 8/10 across the
+session, with the only two remaining fails being `festive`, already
+characterized as noise, and `post_apocalyptic`'s new guardrail-rejection
+finding above). The lesson worth keeping: a single hard case can look
+unfixable in isolation while the surrounding architecture work that
+targeted it still pays off broadly elsewhere — judge this kind of change
+by the suite, not just the case that motivated it.

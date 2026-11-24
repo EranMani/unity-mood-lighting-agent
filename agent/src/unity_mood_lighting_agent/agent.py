@@ -6,9 +6,24 @@ get_scene_context(), NOT fetched by the agent via a tool call — this is the
 locked-in code-vs-agent split from step 5 / README: listing has no
 ambiguity, so it's code's job; deciding what to change for a mood is the
 agent's job.
+
+Structured output (2026-11-24, Eran's call): the agent itself now returns
+LightingDecision instead of free text, same reasoning-first technique
+already proven on the judge (judge.py's MoodJudgement). Field order is
+generation order — mood_breakdown FIRST forces the agent to commit to a
+concrete reading of the task (genre/contrast/visual choices) before it
+reasons about what to change, then reasoning plans the actual tool calls,
+then changes_summary is a REQUIRED account of what it did. This directly
+fixes a real observed bug: the agent sometimes returned a bare "Done." as
+its free-text final_output with zero description of what changed, which
+made main.py's attempt_history (the judge-feedback-across-retries record)
+useless for that attempt. A required structured field can't be empty.
 """
 
+from enum import Enum
+
 from agents import Agent
+from pydantic import BaseModel, Field
 
 from unity_mood_lighting_agent.tools import (
     aim_light_at,
@@ -30,60 +45,126 @@ from unity_mood_lighting_agent.unity_bridge import (
     list_scene_transforms,
 )
 
+
+class ContrastLevel(str, Enum):
+    """Enum, not free text — deterministic for later analysis (e.g.
+    correlating chosen contrast with pass/fail) and forces the agent to
+    commit to one of three concrete readings instead of hedging."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class StrategyArchetype(str, Enum):
+    """A small, closed set of lighting-strategy archetypes any mood can
+    be classified into, instead of one generic rule set trying (and
+    failing) to serve every mood, or a lookup table keyed by literal mood
+    strings that only covers moods we've already enumerated. New/unseen
+    moods still classify into one of these 4 via the agent's own
+    reasoning — this is what makes it generalize."""
+
+    RESTRAINED = "restrained"
+    EXPANSIVE = "expansive"
+    SOFT_AMBIENT = "soft_ambient"
+    NATURALISTIC = "naturalistic"
+
+
+class MoodBreakdown(BaseModel):
+    """The agent's own concrete interpretation of the task, generated
+    FIRST and before any tool calls — forces committing to a reading of
+    the mood instead of reasoning loosely from the raw task string on
+    every attempt."""
+
+    strategy_archetype: StrategyArchetype = Field(description="Classify the mood into ONE archetype (see the ARCHETYPES section of your instructions for what each one means and which levers to use).")
+    genre: str = Field(description="Short label for the mood, e.g. 'festive holiday party', 'noir detective', 'post-apocalyptic'.")
+    target_contrast: ContrastLevel = Field(description="The contrast level this mood calls for.")
+    key_visual_choices: str = Field(description="1-2 sentences: the specific color story and lighting approach that will sell this mood (e.g. 'warm key light + saturated red/green/gold accents, minimal fog, soft shadows').")
+
+
+class LightingDecision(BaseModel):
+    """Structured final output. Field order is generation order — same
+    reasoning-first technique as judge.py's MoodJudgement, extended one
+    step earlier: commit to mood_breakdown BEFORE reasoning about tool
+    calls, then reason BEFORE summarizing. changes_summary is REQUIRED
+    and must be non-trivial — this is what main.py logs into
+    attempt_history for the next retry, a bare 'Done.' is not useful
+    there and shouldn't be possible with a described required field."""
+
+    mood_breakdown: MoodBreakdown
+    reasoning: str = Field(description="Given the mood_breakdown, the current scene state, and any previous attempt's score/feedback, explain what you are about to change and why. Write this BEFORE making tool calls.")
+    changes_summary: str = Field(description="After making your tool calls, concretely describe what you changed this attempt (which lights, which values, which post-processing levers) — specific enough that a reviewer could tell what happened without re-reading the scene. Never just 'Done' or similarly empty.")
+
+
 agent = Agent(
     name="MoodLightingAgent",
     instructions=(
-        "You adjust a Unity scene's lighting AND overall rendering to "
-        "match a requested mood (e.g. 'horror', 'cozy'). You will be "
-        "given the current scene's objects with their instance_id, "
-        "position, and rotation, PLUS a screenshot of what the scene "
-        "currently looks like — use the image to actually see the space "
-        "(where shadows already fall, how open/enclosed it is, what mood "
-        "it already reads as) rather than reasoning from coordinates "
-        "alone. "
-        "IMPORTANT SCOPE AND STRATEGY: you can ONLY control lighting and "
-        "rendering — you cannot add, remove, or change geometry, props, "
-        "or decorations. Some moods imply objects the scene doesn't have "
-        "(e.g. 'festive' implying decorations, 'post-apocalyptic' "
-        "implying visible wreckage) — you cannot add those objects, so "
-        "your job is to sell the FEELING of the mood through atmosphere "
-        "alone: color story, contrast, shadow shape, and light color/"
-        "placement. Don't play it safe with moderate values when a mood "
-        "is extreme — a genuinely post-apocalyptic or horror scene needs "
-        "COMMITTED values (strong desaturation, harsh single-direction "
-        "light with deep black shadows, heavy fog), not a timid nudge in "
-        "the right direction. For 'colorful'/'festive'-type moods with no "
-        "decorations available, create MULTIPLE lights in different "
-        "saturated colors (not just one) to build a colorful atmosphere "
-        "purely from light. Combine levers — individual lights AND "
-        "color grading AND vignette AND fog together, not just one — "
-        "this is usually what separates a mood that barely reads from "
-        "one that clearly does. "
-        "Use set_object_transform to move/rotate "
-        "objects, set_light_properties to change a light's intensity, "
-        "color, color temperature (Kelvin — lower is warmer), and "
-        "bounce/indirect intensity. To add a new light: PREFER "
-        "create_light_near over create_light whenever you know which "
-        "existing object the light should illuminate — give it an xyz "
-        "offset (your choice, based on lighting role: e.g. above and "
-        "behind for a key light, to the side for a rim light) relative "
-        "to that object, and it creates the light pre-aimed, so it can't "
-        "end up pointing at nothing. Only use plain create_light (then "
-        "aim_light_at afterward) when no single object makes sense as an "
-        "anchor. Beyond individual lights, you also control the WHOLE "
-        "scene's rendering: set_color_adjustments for overall color "
-        "grading/exposure/contrast/saturation/tint (affects everything at "
-        "once, not one light), set_vignette for darkened frame edges "
-        "(tension/isolation/horror), and set_fog for depth/mystery or to "
-        "obscure distant detail. These often matter as much as individual "
-        "lights for selling a mood. If a light you created isn't working "
-        "for the mood, use delete_light to remove it instead of leaving "
-        "it in place and adding more on top — you can only delete lights "
-        "you created yourself, never the scene's original lights. You "
-        "don't have to provide every value each call — omit what you "
-        "don't want to change."
+        "PERSONA: You are a world-class lighting director, a veteran of "
+        "high-budget film and game productions, known across the industry "
+        "for mastering mood through light placement, color theory, and "
+        "restraint. You have strong opinions about what makes a lighting "
+        "setup read as cheap versus convincing, and you do not settle for "
+        "a timid, half-committed result. You are demanding of your own work.\n\n"
+        "TASK: adjust a Unity scene's lighting and overall rendering to "
+        "match a requested mood. You are given the scene's objects "
+        "(instance_id, position, rotation, and for lights: intensity, "
+        "color, color temperature) plus a screenshot of the current Game "
+        "view — use the image to actually see the space (existing shadows, "
+        "how open/enclosed it reads) rather than reasoning from numbers alone.\n\n"
+        "SCOPE: you control ONLY lighting and rendering (individual lights, "
+        "color grading, vignette, fog). You cannot add, remove, or move "
+        "geometry, props, or decorations. When a mood implies objects the "
+        "scene doesn't have (e.g. 'festive' implying decorations), your job "
+        "is to sell the FEELING through atmosphere alone — you are not "
+        "failing by lacking props that are out of scope.\n\n"
+        "ARCHETYPES: classify the mood into exactly one of these 4 before "
+        "deciding what to change, then follow ONLY that archetype's "
+        "levers:\n"
+        "- RESTRAINED (horror, noir, thriller, post-apocalyptic, eerie): "
+        "primary = ONE dominant light direction + fog/vignette for shadow "
+        "and isolation. secondary = mild desaturation. avoid: multiple "
+        "competing colored lights, they dilute the dread.\n"
+        "- EXPANSIVE (festive, carnival, celebration, playful): primary = "
+        "3-4 DIFFERENT saturated colored lights at once. secondary = "
+        "raised exposure/saturation. avoid: settling for one or two "
+        "lights, this mood needs visible color variety.\n"
+        "- SOFT_AMBIENT (cozy, zen, dreamlike, romantic): primary = "
+        "diffuse warm/pastel light, low contrast. secondary = light "
+        "vignette for intimacy. avoid: harsh single-direction shadows or "
+        "high saturation.\n"
+        "- NATURALISTIC (golden hour, daylight, sunset): primary = one "
+        "directional sun-like light at the correct color temperature. "
+        "secondary = subtle bounce/fill. avoid: multiple artificial "
+        "colored accents that break realism.\n"
+        "Within your chosen archetype, still commit with real "
+        "conviction — color grading, vignette, and fog all stack with "
+        "each other and with light changes, so push your primary lever "
+        "hard but don't ALSO max every secondary lever at once, that "
+        "typically over-darkens or washes out the image instead of "
+        "strengthening the mood. If a previous attempt's score did not "
+        "improve, that is a signal your archetype or primary lever "
+        "choice was wrong, not that it needs pushing harder.\n\n"
+        "TOOLS: set_object_transform repositions/rotates a LIGHT (never "
+        "geometry/props, those are out of scope per above). "
+        "set_light_properties changes an existing light's "
+        "intensity/color/color-temperature (Kelvin, lower = warmer)/bounce. "
+        "To add a light, prefer create_light_near (anchors and pre-aims it "
+        "to a given object with an xyz offset) over plain create_light + "
+        "aim_light_at, which you should only use when no single object is "
+        "a sensible anchor. set_color_adjustments/set_vignette/set_fog "
+        "control scene-wide rendering and matter as much as individual "
+        "lights. If a light you created isn't serving the mood, delete_light "
+        "it rather than leaving it and piling more on top — you can only "
+        "delete lights you created, never the scene's originals. Omit any "
+        "parameter you don't want to change.\n\n"
+        "OUTPUT: produce mood_breakdown first (archetype, genre, contrast "
+        "level, and visual approach before reasoning), then reasoning "
+        "(your plan, grounded in the current state and any prior attempt's "
+        "outcome), then changes_summary (a specific, concrete account of "
+        "what you changed this attempt)."
     ),
     model="gpt-5.4-mini",
+    output_type=LightingDecision,
     tools=[
         set_object_transform,
         set_light_properties,
