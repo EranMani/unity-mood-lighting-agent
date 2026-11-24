@@ -516,3 +516,96 @@ finding above). The lesson worth keeping: a single hard case can look
 unfixable in isolation while the surrounding architecture work that
 targeted it still pays off broadly elsewhere — judge this kind of change
 by the suite, not just the case that motivated it.
+
+## The 8/10 result didn't survive human eyes: the judge itself was too lenient (2026-11-24)
+
+**Context.** After the 8/10 full-suite result above, Eran looked at the
+actual `horror` and `thriller` result screenshots (the ones that scored
+7/10 PASS) and flagged them as visually dull, flat, evenly-lit — not
+dramatic or tense by his own human judgment at all. He raised a sharp
+question before accepting any score at face value again: when the
+automated judge passes something a human reviewer wouldn't, who is at
+fault — the lighting agent, the judge, or the human for not trusting the
+pipeline?
+
+**What we actually did before answering that**: looked at the real
+`horror` and `thriller` `latest/result.png` images directly (not the
+text score) — same "inspect the artifact, don't trust the number"
+principle this project has used since the screenshot pipeline caught
+`post_apocalyptic`'s near-black "pass" earlier. Both images were a flat,
+cold blue-gray wash: evenly lit, no visible shadow shape from an actual
+light direction, nothing reading as dramatic or threatening. Eran's
+visual read was correct, confirmed directly, not deferred to on
+authority.
+
+**Diagnosis**: this is a judge-calibration problem, not a model-capability
+problem and not an agent-competence problem. The judge's own instructions
+had been recalibrated earlier this session (step: "score atmosphere given
+existing geometry, don't penalize missing props") specifically to stop
+being too HARSH about missing content. That fix was correct for the
+problem it targeted (eerie_lab/post_apocalyptic/festive's content-ceiling
+false negatives), but it had a side effect never checked until now: the
+judge became too LENIENT about atmosphere/drama itself, conflating "cold
+color temperature + reduced brightness" with "genuinely dramatic
+lighting." A dim room and a dramatically-lit room can both read as "dark
+and moody" in a text description without the judge distinguishing them —
+the judge needed a concrete visual bar for what drama actually requires
+(shadow shape, a readable light source doing work), not just absence of
+a content-ceiling penalty.
+
+**Why we rejected "check ModelSettings (temperature/reasoning effort)"
+as the fix**, which Eran raised as a candidate: those settings control
+HOW consistently/deliberately a model reasons, not WHAT criteria it
+reasons against. A model thinking harder with the same lenient judge
+instructions still passes a dim flat room, because the instructions
+themselves never specified the difference between "dim" and "dramatic."
+No evidence pointed at the model itself being the bottleneck — the
+judge's own instructions were the identified, concrete cause, so that's
+what got changed, not model hyperparameters (consistent with this
+project's standing rule: don't guess at infra/model-level fixes without
+evidence pointing there).
+
+**The fix**: added a "CRITICAL CALIBRATION" clause to `judge.py`'s
+instructions — explicit that a cold color temperature alone is not
+drama, real drama requires visible shadow shape from an actual light
+direction (not a uniform dark wash) plus enough brightness to still read
+the scene, and that a frame reading as "the lights were turned down"
+rather than "deliberately and dramatically lit" must score LOW for any
+mood calling for tension/horror/drama regardless of color temperature.
+Also told the judge to score its own `contrast_level` field honestly and
+treat a self-reported low/medium contrast as incompatible with a 6+
+score on a high-drama mood.
+
+**Result, re-testing `horror` only**: the SAME agent code that produced
+the visually-dull 7/10 PASS screenshot earlier now scored attempt 1 at
+**3/10**, attempt 2 at **5/10**, and attempt 3 got rejected by the
+visibility guardrail (pushed to `mean_brightness=1.8/255`, fully black)
+before a judge call was even spent — **horror now FAILS entirely** under
+the tightened judge. This directly confirms Eran's visual read: the old
+7 PASS was real miscalibration, not genuine quality, the SAME underlying
+agent output that used to pass now correctly fails.
+
+**New problem this exposed, not yet fixed**: the agent's retry logic has
+no equivalent of the "dim ≠ dramatic" distinction we just gave the
+judge. Told its score plateaued/stayed low, and following its own
+`restrained` archetype's "commit hard" instruction, the agent's only
+available move was to keep pushing exposure/vignette/fog further DOWN
+each attempt — walking straight into the same near-black guardrail
+rejection already seen on `post_apocalyptic`. A stricter, more honest
+judge just makes an agent that doesn't know the real distinction
+overcorrect into blackness instead of actually getting more dramatic.
+This is the next thing to fix — teaching the AGENT (not just the judge)
+that real drama needs a directional light source and visible shadow
+shape, not just reduced overall brightness — tracked as a follow-up, not
+yet implemented as of this doc entry.
+
+**Who was at fault, stated plainly for the record**: the judge's
+calibration, not the lighting agent (which followed its instructions
+faithfully and got no useful signal telling it darker ≠ better) and not
+Eran (whose visual read was the correct one all along). This is the
+second time this exact category of bug has hit this project — a judge
+whose instructions don't match the real human bar for its target concept
+— first for "missing content," now for "drama vs. dimness." Worth
+treating as a pattern: whenever a judge's pass rate feels wrong by eye,
+suspect the judge's own instructions before suspecting the agent or the
+model.
