@@ -30,6 +30,7 @@ from unity_mood_lighting_agent.tools import (
     create_light,
     create_light_near,
     delete_light,
+    set_ambient,
     set_color_adjustments,
     set_fog,
     set_light_properties,
@@ -37,6 +38,7 @@ from unity_mood_lighting_agent.tools import (
     set_vignette,
 )
 from unity_mood_lighting_agent.unity_bridge import (
+    get_ambient,
     get_color_adjustments,
     get_fog,
     get_light_properties,
@@ -139,14 +141,24 @@ agent = Agent(
         "temperature.\n\n"
         "CREATIVE FREEDOM: beyond the genre/contrast guidance above, you "
         "have real creative freedom in which lights, colors, ranges, "
-        "shadow types, and global grading you use to sell each mood. Two "
-        "deterministic checks run on every attempt purely to catch "
-        "EXTREME failures on either side — a frame gone fully "
-        "black/unreadable, or (only for high-contrast moods) a frame so "
-        "flat it has no real brightness variation at all. They are a "
-        "safety net against degenerate results, not a style prescription "
-        "— clearing them is not the same as succeeding at the mood. Push "
-        "as boldly as you judge the mood actually needs.\n\n"
+        "shadow types, and global grading you use to sell each mood. One "
+        "concrete fact, not a style prescription: for a genuinely "
+        "dramatic/high-contrast mood, a SINGLE light needs to clearly "
+        "dominate — pull the SCENE's other existing lights' intensity "
+        "near-zero (not just lower), not left at a similar strength to "
+        "your key light, and pull set_ambient's intensity down toward 0 "
+        "too (it's a uniform fill applied everywhere regardless of any "
+        "light's range, and sits at a flattening 1.0 by default — a dark "
+        "zone cannot read as genuinely dark while it's high, no matter "
+        "what any individual light does). Two deterministic checks run "
+        "on every attempt purely to catch EXTREME failures on either "
+        "side — a frame gone fully black/unreadable, or (only for "
+        "high-contrast moods) a frame so flat it has no real brightness "
+        "variation, OR has a wide variation but its dark zone still "
+        "isn't actually dark. They are a safety net against degenerate "
+        "results, not a style prescription — clearing them is not the "
+        "same as succeeding at the mood. Push as boldly as you judge the "
+        "mood actually needs.\n\n"
         "TOOLS: set_object_transform repositions/rotates a LIGHT (never "
         "geometry/props, those are out of scope per above). "
         "set_light_properties changes an existing light's "
@@ -186,6 +198,7 @@ agent = Agent(
         set_color_adjustments,
         set_vignette,
         set_fog,
+        set_ambient,
     ],
 )
 
@@ -232,6 +245,7 @@ def get_scene_context() -> str:
     color = get_color_adjustments()
     vignette = get_vignette()
     fog = get_fog()
+    ambient = get_ambient()
     post_processing_section = (
         "Current scene-wide post-processing (these effects STACK with "
         "each other and with individual light changes — if several are "
@@ -244,7 +258,12 @@ def get_scene_context() -> str:
         f"- Vignette: intensity={vignette.intensity}, smoothness={vignette.smoothness}\n"
         f"- Fog: enabled={fog.enabled}, density={fog.density}, "
         f"start_distance={fog.start_distance}, end_distance={fog.end_distance}, "
-        f"color=({fog.color_r}, {fog.color_g}, {fog.color_b})"
+        f"color=({fog.color_r}, {fog.color_g}, {fog.color_b})\n"
+        f"- Ambient intensity: {ambient.intensity} (uniform fill applied to the WHOLE "
+        "scene regardless of any individual light — Unity's default is 1.0; this is "
+        "usually why a dark zone won't go near-black even with a light's range/"
+        "intensity pulled right down. Low (0.0-0.15) for dramatic moods, near-default "
+        "for diffuse/soft ones.)"
     )
 
     return f"{transforms_section}\n\n{bounds_section}\n\n{post_processing_section}"

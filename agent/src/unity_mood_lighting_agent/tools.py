@@ -28,6 +28,7 @@ from unity_mood_lighting_agent.unity_bridge import (
     list_scene_transforms,
 )
 from unity_mood_lighting_agent.unity_bridge import set_color_adjustments as _set_color_adjustments
+from unity_mood_lighting_agent.unity_bridge import set_ambient as _set_ambient
 from unity_mood_lighting_agent.unity_bridge import set_fog as _set_fog
 from unity_mood_lighting_agent.unity_bridge import set_light_properties as _set_light_properties
 from unity_mood_lighting_agent.unity_bridge import set_object_transform as _set_object_transform
@@ -429,6 +430,23 @@ def set_vignette(intensity: float, smoothness: float = 0.4) -> str:
 
     _set_vignette(intensity=intensity, smoothness=smoothness)
     return f"Updated vignette: intensity={intensity}, smoothness={smoothness}."
+
+
+@function_tool
+def set_ambient(intensity: float) -> str:
+    """Set the scene's ambient light intensity — a uniform fill applied to
+    EVERY surface regardless of any individual light's position or range.
+    Unity's default is 1.0. For a high-contrast/dramatic mood, this is
+    often the real reason un-lit areas never read as genuinely dark: no
+    matter how far you shrink a light's range or how low you set another
+    light's intensity, this floor still applies everywhere. Pull it down
+    toward 0 (0.0-0.15) for THREAT/DRAMATIC moods so your dark zones can
+    actually go near-black. Leave it near its default for diffuse/soft
+    moods where an even fill IS the desired look."""
+    if intensity < 0:
+        return f"Rejected: intensity {intensity} is negative."
+    _set_ambient(intensity=intensity)
+    return f"Updated ambient intensity to {intensity}."
 
 
 @function_tool

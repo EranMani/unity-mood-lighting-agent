@@ -1,26 +1,28 @@
 {
   "lights": [
     {
-      "instance_id": "568105584918952190",
+      "instance_id": "568105584918953290",
       "name": "Point Light (4)",
       "mode": "Realtime",
       "type": "Point",
-      "intensity": 2.17,
-      "color_r": 1,
-      "color_g": 1,
-      "color_b": 1,
-      "range": 4.13
+      "intensity": 0.35,
+      "color_r": 0.2,
+      "color_g": 0.3,
+      "color_b": 0.45,
+      "range": 2.2,
+      "shadow_type_int": 1
     },
     {
-      "instance_id": "568105584918952210",
+      "instance_id": "568105584918953310",
       "name": "Point Light (3)",
       "mode": "Realtime",
       "type": "Point",
-      "intensity": 0.81,
-      "color_r": 0.619607866,
-      "color_g": 0.9960785,
-      "color_b": 0.9960785,
-      "range": 1.77
+      "intensity": 1.25,
+      "color_r": 0.35,
+      "color_g": 0.62,
+      "color_b": 1,
+      "range": 1.8,
+      "shadow_type_int": 1
     }
   ],
   "reflection_probes": [],
@@ -29,26 +31,29 @@
   "baked_gi": false,
   "scene_path": "Assets/room/Cosmic_Retro_MessHall_Props_FREE/Demo_Scene/Cosmic_Retro_Mesa_Props_Free.unity",
   "color_adjustments": {
-    "post_exposure": 0.39,
-    "contrast": 17.6,
-    "saturation": 7.8,
-    "color_filter_r": 1.0,
-    "color_filter_g": 1.0,
+    "post_exposure": -0.2,
+    "contrast": 28.0,
+    "saturation": -12.0,
+    "color_filter_r": 0.78,
+    "color_filter_g": 0.86,
     "color_filter_b": 1.0
   },
   "vignette": {
-    "exists": false,
-    "intensity": 0.0,
-    "smoothness": 0.0
+    "exists": true,
+    "intensity": 0.28,
+    "smoothness": 0.62
   },
   "fog": {
     "enabled": true,
-    "color_r": 0.185653239,
-    "color_g": 0.213942066,
-    "color_b": 0.264150918,
+    "color_r": 0.1,
+    "color_g": 0.14,
+    "color_b": 0.2,
     "mode": "Linear",
     "density": 0.06,
-    "start_distance": 17.68,
-    "end_distance": 86.31
+    "start_distance": 11.0,
+    "end_distance": 18.0
+  },
+  "ambient": {
+    "intensity": 1.0
   }
 }

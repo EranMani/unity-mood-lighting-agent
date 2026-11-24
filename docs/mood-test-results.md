@@ -844,3 +844,147 @@ result:**
 - The loosened instructions (simpler, no regressions, one real
   improvement, removes prose that was quietly fighting the model's own
   judgment).
+
+## Rejecting "swap the scene" and finding the real remaining bottleneck: ambient light, a broken contrast metric, and a spatial-reasoning gap (2026-11-24, continued)
+
+**Context.** Proposed 2 ways out of the RESTRAINED ceiling above: a
+genuinely different test scene, or averaging multiple trials. Eran
+rejected both, explicitly and for a real product reason, not
+stubbornness: "what if a user will work with crappy scene like this? we
+want to be able to handle any kind of scene that will get thrown at
+us... lets keep working on lighting only, and work on the current
+scenes and make sure that they constantly pass." Picking a nicer scene
+to make the numbers look better was never a fix, it would just hide the
+same gap from a future real user. Directed instead: review the
+architecture itself for what's actually still missing.
+
+**Technique 1 — test hypotheses directly against the live Editor, not
+in prose.** Two live experiments, both run before touching any code:
+- Disabled Bloom entirely mid-scene, re-measured contrast: 35 -> 34, no
+  meaningful change. Hypothesis (bloom softening edges) ruled out,
+  concretely, not assumed.
+- Manually tuned one light to an extreme (intensity 20, tight range):
+  measured spread=66 — looked like proof the room could do it. Visual
+  inspection immediately showed it was a blown-out, fully-clipped solid
+  color, not real drama — a false positive caught by looking at the
+  actual pixels before trusting the number, same discipline as every
+  other check this session. Retried with sane values (intensity 6):
+  spread=68, genuinely visible this time — a cheerful, evenly-lit,
+  bright room, also not real drama, but the room's physical geometry
+  demonstrably CAN reach real-reference contrast levels. Ruled out "the
+  room/scene is the ceiling" as cleanly as the bloom hypothesis.
+
+**Technique 2 — a metric bug hiding in plain sight, found by looking at
+a result the number said was fine.** That "bright room" test is the
+key finding of this entire sub-investigation: it measured spread=68
+(numerically in real-reference range) while being visually the
+opposite of dramatic. Root cause: `CONTRAST_SPREAD_FLOOR` only checked
+the GAP between p10 and p90, never that the dark side was actually
+dark. A normal, evenly-lit room with ordinary material/geometry
+variance can produce a wide gap on its own, with p10=52 (not remotely
+near-black). Recomputed p10/p90 on all 11 real reference images to
+calibrate correctly: every real THREAT/DRAMATIC reference (horror,
+horror2, Noir, Thriller, Eerie Lab) measured p10 in 1-7; the
+false-positive bright room measured p10=52 — wide, clean gap, same
+calibration method used for the spread floor itself. Added
+`P10_CEILING = 30.0`; `has_real_contrast` now requires BOTH conditions.
+This explains the whole session's earlier pattern for free: every
+attempt that crossed the old floor-only check still scored ~5/10 from
+the judge, because crossing it only proved "not uniformly flat," never
+proved real directional drama.
+
+**Technique 3 — a logging blind spot, fixed before diagnosing further.**
+The per-attempt debug print only ran AFTER a guardrail-rejected attempt
+had already been skipped, so a flat/rejected attempt's actual light
+values were invisible in every log this whole session — impossible to
+answer "did it even try to dim the other lights" from the logs alone.
+Moved the print (archetype, genre, target_contrast, changes_summary,
+and every light's live intensity/range/shadow_type/color) to run
+immediately after the agent's decision, before any guardrail can skip
+the rest of the loop.
+
+**Technique 4 — the real missing lever: ambient light, never read,
+never exposed, structural, not a style/prompt problem.** Eran asked
+directly: why would two existing lights + a dominant-key strategy still
+fail to produce real contrast? Checked `RenderSettings.ambientIntensity`
+live: sitting at Unity's default of 1.0 all session, a uniform fill
+applied to the ENTIRE scene regardless of any individual light's
+position or range — never read, never exposed as a tool, never
+mentioned anywhere. Tested directly: dropped it to 0.05 on the agent's
+own last (still-failing) light config, no other changes: p10 dropped
+16 -> 7, a real, measurable, structural effect. Built `get_ambient()`/
+`set_ambient()` (RenderSettings, not a Volume override — simpler
+static property, no profile involved), wired into `capture_scene_
+baseline()`/`restore_scene_baseline()` so it resets cleanly between
+test runs (deleted and let the 2 cached baseline snapshots recapture
+fresh rather than hand-editing stale JSON — same principle the system
+already uses: never fabricate baseline data, only ever capture it
+live). Also fixed a related, previously-unnoticed gap found while in
+this code: `restore_scene_baseline()` never restored a light's
+`shadow_type`, only intensity/color/range — the capture script didn't
+even record it. Fixed both ends (`shadow_type_int` now captured and
+restored as an int-cast enum, matching the pattern already used
+everywhere else in this file for Unity enum writes).
+
+**Result after exposing ambient + reinforcing "zero the other light,
+not just dim it" in the instructions:** real, visible behavioral
+change, the first of its kind all session — attempt 1 correctly
+dropped ambient to 0.08 and the secondary light to 0.03 (overshot into
+full black, caught by the visibility guardrail); attempt 2 corrected to
+ambient=0.14, secondary=0.06, landed p10=6 — genuinely dark, comfortably
+under the new ceiling, the dark-zone problem that defined this entire
+investigation is gone. Still failed (spread=29, short of 35) — but for
+a new, different, precisely diagnosed reason this time.
+
+**Technique 5 — instrument the real tool calls instead of guessing from
+the agent's own prose.** Eran asked the sharp question directly: does
+the agent actually understand key-light theory, or just the vocabulary
+for it? Monkeypatched `tools._set_light_properties` to print every real
+call's arguments during one full run, independent of what the model's
+own `changes_summary` claimed. Result, a precise, two-part answer:
+- It genuinely calls the tool and genuinely escalates intensity each
+  attempt (0.18 -> 0.32 -> 0.85) — this is NOT a stated-intent-vs-
+  no-op gap, it really is trying.
+- But it's escalating within a self-invented, wrong order of magnitude
+  — this room's own original lights sit around intensity 5-6; tripling
+  0.18 twice only reaches 0.85, nowhere near genuinely bright.
+- Separately, confirmed by grepping live object positions:
+  `set_object_transform`/`aim_light_at` were called ZERO times this
+  entire session on either existing light — both tools already exist
+  and already work, the agent simply never considers repositioning or
+  re-aiming a light as an available lever, only ever tunes numeric
+  properties on whatever position the scene's original artist left it.
+
+**Key decision, explicitly reasoned through with Eran before building
+anything further**: rejected both "explain key/fill/back/rim theory"
+(the model already uses this vocabulary correctly in its own reasoning,
+the concept isn't missing) and "build a new enforcing placement tool"
+(the tools already exist and already work, they're simply unused) as
+the fix. Also rejected anchoring a fixed numeric intensity reference
+(e.g. "~5-6") directly into the instructions — Eran caught this live:
+"lets assume we get a scene with no lights... the agent needs to build
+his own baseline... we cant rely on existing baseline from existing
+lights" — a hardcoded number specific to this one room would not
+generalize to a scene with zero pre-existing lights, which the product
+must handle. Also rejected forcing tool use via `ModelSettings.
+tool_choice="required"` for the same reason as always this session:
+it only guarantees SOME tool call before the model can finish, it
+can't force a SPECIFIC tool or force real geometric reasoning behind
+the call — an opaque config knob instead of a legible, debuggable
+instruction, inconsistent with everything that has actually worked
+this project.
+
+**Next direction, Eran's framing, not yet built**: before redesigning
+the attempt loop into explicit phases (a dedicated "establish spatial
+baseline from scene geometry" first pass, followed by judge-feedback-
+driven refinement passes), test the prerequisite question in total
+isolation first — does the model have genuine spatial reasoning
+capability at all, given the scene's bounding box, object positions,
+and camera image? Agreed: build this as a small, separate, fully
+deterministic diagnostic (geometric pass/fail — did the resulting
+light's position/rotation actually hit the intended target, at what
+distance/angle — reusing the raycast-hit-target logic `aim_light_at`'s
+own guardrail already has, no judge LLM needed at all), kept separate
+from the mood eval suite's pass/fail tally since it tests an entirely
+different capability and shouldn't blur two unrelated numbers together.
+Not yet implemented — next session's starting point.

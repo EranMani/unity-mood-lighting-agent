@@ -39,13 +39,16 @@ from unity_mood_lighting_agent.judge import judge_mood_match
 from unity_mood_lighting_agent.tools import cleanup_agent_lights
 from unity_mood_lighting_agent.unity_bridge import (
     CONTRAST_SPREAD_FLOOR,
+    P10_CEILING,
     capture_game_view,
     capture_scene_baseline,
     check_frame_contrast,
     check_frame_visibility,
     ensure_scene_ready,
     get_active_scene,
+    get_light_properties,
     image_to_data_url,
+    list_scene_transforms,
     open_scene,
     restore_scene_baseline,
 )
@@ -221,6 +224,27 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
             result = await Runner.run(agent, prompt)
             decision: LightingDecision = result.final_output
 
+            # Debug visibility: print what the agent actually did to every
+            # LIGHT this attempt, BEFORE any guardrail can skip the rest of
+            # the loop — previously this only printed after a guardrail
+            # pass, so a rejected attempt's actual light values were
+            # invisible in the logs, impossible to tell "did it even try
+            # to dim the other lights" from "it tried and still failed."
+            print(
+                f"[attempt {attempt}/{MAX_ATTEMPTS}] agent archetype="
+                f"{decision.mood_breakdown.strategy_archetype.value} "
+                f"genre={decision.mood_breakdown.genre} "
+                f"target_contrast={decision.mood_breakdown.target_contrast.value} "
+                f"changes={decision.changes_summary}"
+            )
+            for o in list_scene_transforms():
+                if o.is_light:
+                    lp = get_light_properties(o.instance_id)
+                    print(
+                        f"  [light] {o.name}: intensity={lp.intensity} range={lp.range} "
+                        f"shadow_type={lp.shadow_type} color=({lp.color_r:.2f},{lp.color_g:.2f},{lp.color_b:.2f})"
+                    )
+
             # Guardrail: check the ACTUAL rendered pixels before paying
             # for the judge LLM call. Found live that per-field clamps
             # can't catch this — a compound stack of individually
@@ -271,21 +295,35 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
             if decision.mood_breakdown.target_contrast.value == "high":
                 contrast = check_frame_contrast(post_attempt_capture.path)
                 if not contrast.has_real_contrast:
+                    spread_ok = contrast.spread >= CONTRAST_SPREAD_FLOOR
+                    p10_ok = contrast.p10 <= P10_CEILING
                     print(
-                        f"[guardrail] frame too flat for a high-contrast mood after attempt "
+                        f"[guardrail] frame failed contrast check after attempt "
                         f"{attempt}/{MAX_ATTEMPTS} (p10={contrast.p10}, p90={contrast.p90}, "
-                        f"spread={contrast.spread}, floor={CONTRAST_SPREAD_FLOOR}) — skipping judge call"
+                        f"spread={contrast.spread}, spread_floor={CONTRAST_SPREAD_FLOOR}, "
+                        f"p10_ceiling={P10_CEILING}) — skipping judge call"
                     )
-                    feedback = (
-                        f"Your last change produced a frame with brightness spread={contrast.spread} "
-                        f"(p10={contrast.p10}, p90={contrast.p90}/255) — too flat for a high-contrast "
-                        f"mood, which needs at least {CONTRAST_SPREAD_FLOOR} spread between its darkest "
-                        "and brightest zones. This usually means no single light is genuinely dominant "
-                        "(push ONE light's intensity clearly above the room's baseline and shrink its "
-                        "range to a tight pool) or global grading is flattening the differential the "
-                        "lights created (ease off post_exposure/contrast/vignette/fog and let the light "
-                        "itself create the contrast)."
-                    )
+                    if not spread_ok:
+                        feedback = (
+                            f"Your last change produced a frame with brightness spread={contrast.spread} "
+                            f"(p10={contrast.p10}, p90={contrast.p90}/255) — too flat for a high-contrast "
+                            f"mood, which needs at least {CONTRAST_SPREAD_FLOOR} spread between its darkest "
+                            "and brightest zones. This usually means no single light is genuinely dominant "
+                            "(push ONE light's intensity clearly above the room's baseline and shrink its "
+                            "range to a tight pool) or global grading is flattening the differential the "
+                            "lights created (ease off post_exposure/contrast/vignette/fog and let the light "
+                            "itself create the contrast)."
+                        )
+                    else:
+                        feedback = (
+                            f"Your last change has a wide brightness spread ({contrast.spread}) but its "
+                            f"darkest zone (p10={contrast.p10}/255) still isn't actually dark enough — a "
+                            f"high-contrast mood needs its dark zone at or below {P10_CEILING}/255. A wide "
+                            "spread from a generally bright, evenly-lit room with natural material variance "
+                            "is NOT the same as real dramatic falloff. Pull back the OTHER lights' intensity/"
+                            "range much further (near-off, not just dimmer) so large areas of the frame are "
+                            "genuinely near-black, not just dimmer than your key light."
+                        )
                     if attempt == MAX_ATTEMPTS:
                         _log_guardrail_rejection(
                             task, attempt, "contrast",

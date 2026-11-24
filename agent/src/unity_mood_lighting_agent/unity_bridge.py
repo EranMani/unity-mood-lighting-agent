@@ -312,6 +312,17 @@ NEAR_BLACK_THRESHOLD = 15  # out of 255, per-pixel
 # produced so far. Revisit only if a genuinely high-contrast PASSING
 # mood trips this floor (not yet observed).
 CONTRAST_SPREAD_FLOOR = 35.0  # p90 - p10 luminance, out of 255
+P10_CEILING = 30.0  # dark-zone luminance must actually be dark, out of 255
+# Calibrated live, 2026-11-24: real THREAT/DRAMATIC references (horror,
+# horror2, Noir, Thriller, Eerie Lab) measured p10 in 1-7 (genuinely
+# near-black shadows); a manually-tuned "bright, evenly-lit room" that
+# PASSED the spread floor (spread=68) measured p10=52 — spread alone is
+# NOT sufficient, since a normal well-lit room with natural
+# material/geometry variance can produce a wide p90-p10 gap without any
+# of it actually being dark. p10<=30 sits above the loosest real
+# high-contrast reference seen (Festive.jpg p10=20) and well below the
+# false-positive bright-room case (52) — wide, clean gap, same
+# calibration method as CONTRAST_SPREAD_FLOOR itself.
 
 
 class FrameVisibility(BaseModel):
@@ -363,8 +374,8 @@ class FrameContrast(BaseModel):
 
     p10: float = Field(description="10th percentile luminance, 0-255 — how dark the dark zone actually gets.")
     p90: float = Field(description="90th percentile luminance, 0-255 — how bright the bright zone actually gets.")
-    spread: float = Field(description="p90 - p10. Real dramatic lighting measured 45-79 on real game references; this project's own flat failures measured 7-20.")
-    has_real_contrast: bool
+    spread: float = Field(description="p90 - p10. Real dramatic lighting measured 45-79 on real game references; this project's own flat failures measured 7-20. Necessary but NOT sufficient on its own — a bright, evenly-lit room can also produce a wide spread from natural material variance without any real darkness; see p10/has_real_contrast.")
+    has_real_contrast: bool = Field(description="True only if spread>=CONTRAST_SPREAD_FLOOR AND p10<=P10_CEILING — both a real gap AND a genuinely dark zone, not just a bright room with incidental tonal range.")
 
 
 def check_frame_contrast(image_path: str) -> FrameContrast:
@@ -398,7 +409,7 @@ def check_frame_contrast(image_path: str) -> FrameContrast:
         p10=float(p10),
         p90=float(p90),
         spread=float(spread),
-        has_real_contrast=spread >= CONTRAST_SPREAD_FLOOR,
+        has_real_contrast=(spread >= CONTRAST_SPREAD_FLOOR) and (p10 <= P10_CEILING),
     )
 
 
@@ -885,6 +896,49 @@ def get_fog() -> FogState:
     return FogState(**json.loads(result.stdout))
 
 
+_GET_AMBIENT_SCRIPT = """
+return new { intensity = UnityEngine.RenderSettings.ambientIntensity };
+""".strip()
+
+
+class AmbientState(BaseModel):
+    intensity: float = Field(
+        description="0-1+, scene-wide uniform ambient fill applied to EVERY "
+        "surface regardless of any individual light. Unity's default is 1.0. "
+        "Confirmed live, 2026-11-24: this is a real, previously-invisible "
+        "floor under every 'dark zone' in the frame — dropping it from 1.0 "
+        "to 0.05 measurably darkened a frame's darkest 10th percentile "
+        "(16 -> 7 out of 255) with no light changes at all."
+    )
+
+
+def get_ambient() -> AmbientState:
+    """Read the scene's current ambient light intensity (RenderSettings,
+    not a Volume override — a simpler static property, no profile
+    involved)."""
+    result = subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", _GET_AMBIENT_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return AmbientState(**json.loads(result.stdout))
+
+
+def set_ambient(intensity: float) -> None:
+    """Set the scene's ambient light intensity. Low (near 0) for
+    high-contrast/dramatic moods so un-lit areas can actually read as
+    near-black instead of sitting on a uniform ambient floor; higher is
+    fine for soft/diffuse moods where that floor is the desired look."""
+    script = f"UnityEngine.RenderSettings.ambientIntensity = {intensity}f; return new {{ ok = true }};"
+    subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
 def set_fog(
     enabled: bool | None = None,
     color: tuple[float, float, float] | None = None,
@@ -1183,7 +1237,8 @@ foreach (var l in lights) {
         type = l.type.ToString(),
         intensity = l.intensity,
         color_r = l.color.r, color_g = l.color.g, color_b = l.color.b,
-        range = l.range
+        range = l.range,
+        shadow_type_int = (int)l.shadows
     });
 }
 var probes = UnityEngine.Object.FindObjectsByType<UnityEngine.ReflectionProbe>(UnityEngine.FindObjectsSortMode.None);
@@ -1243,6 +1298,7 @@ def capture_scene_baseline(scene_path: str | None = None) -> dict:
     data["color_adjustments"] = color.model_dump()
     data["vignette"] = vignette.model_dump()
     data["fog"] = fog.model_dump()
+    data["ambient"] = get_ambient().model_dump()
 
     os.makedirs(_BASELINE_DIR, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -1358,7 +1414,8 @@ def restore_scene_baseline(scene_path: str | None = None) -> dict:
             f'l.lightmapBakeType = UnityEngine.LightmapBakeType.{light["mode"]}; '
             f'l.intensity = {light["intensity"]}f; '
             f'l.color = new UnityEngine.Color({light["color_r"]}f, {light["color_g"]}f, {light["color_b"]}f); '
-            f'l.range = {light["range"]}f; break; }} }}'
+            f'l.range = {light["range"]}f; '
+            f'l.shadows = (UnityEngine.LightShadows){light.get("shadow_type_int", 0)}; break; }} }}'
         )
     probe_restores = []
     for probe in baseline["reflection_probes"]:
@@ -1399,6 +1456,8 @@ def restore_scene_baseline(scene_path: str | None = None) -> dict:
         start_distance=fog["start_distance"],
         end_distance=fog["end_distance"],
     )
+    ambient = baseline.get("ambient", {"intensity": 1.0})  # old baselines predate this field
+    set_ambient(intensity=ambient["intensity"])
 
     return {"status": "restored", "scene_path": scene_path, "lights_restored": len(baseline["lights"]), "probes_restored": len(baseline["reflection_probes"])}
 
