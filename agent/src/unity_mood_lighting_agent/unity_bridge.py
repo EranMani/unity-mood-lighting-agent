@@ -342,6 +342,18 @@ def check_frame_visibility(image_path: str) -> FrameVisibility:
     )
 
 
+# Unity's Light.LightShadows enum displays these human names via
+# `component get_fields` (read-only display strings) but accepts raw ints
+# (0=None, 1=Hard, 2=Soft) via `component set_field` — confirmed live by
+# setting m_Shadows.m_Type=2 and reading back "Soft Shadows".
+_SHADOW_TYPE_DISPLAY_TO_NAME = {
+    "No Shadows": "none",
+    "Hard Shadows": "hard",
+    "Soft Shadows": "soft",
+}
+_SHADOW_TYPE_NAME_TO_INT = {"none": 0, "hard": 1, "soft": 2}
+
+
 class LightProperties(BaseModel):
     """Current/target values for a Light component's mood-relevant fields."""
 
@@ -351,6 +363,9 @@ class LightProperties(BaseModel):
     color_b: float | None = Field(default=None, description="0-1.")
     color_temperature: float | None = Field(default=None, description="Kelvin, e.g. 1800=warm candle, 6500=cool daylight.")
     bounce_intensity: float | None = Field(default=None, description="Indirect/bounce light multiplier.")
+    range: float | None = Field(default=None, description="World-space units the light reaches (Point/Spot only) — small = a tight contained pool, large = floods the whole room evenly. Compare against get_scene_bounds()'s diagonal, not a fixed number.")
+    spot_angle: float | None = Field(default=None, description="Degrees, full cone width (Spot only) — narrow = a tight dramatic beam, wide = a broad soft wash.")
+    shadow_type: str | None = Field(default=None, description="'none', 'hard', or 'soft' — whether this light casts a shadow at all. Lights created fresh default to 'none' (no shadow), which makes real directional shadow shape impossible regardless of intensity/range.")
 
 
 def get_light_properties(target: str) -> LightProperties:
@@ -379,6 +394,9 @@ def get_light_properties(target: str) -> LightProperties:
     )
     raw = json.loads(result.stdout)
     color = raw.get("m_Color") or {}
+    shadows = raw.get("m_Shadows") or {}
+    shadow_type_raw = shadows.get("m_Type")
+    shadow_type = _SHADOW_TYPE_DISPLAY_TO_NAME.get(shadow_type_raw, shadow_type_raw) if shadow_type_raw else None
     return LightProperties(
         intensity=raw.get("m_Intensity"),
         color_r=color.get("r"),
@@ -386,6 +404,9 @@ def get_light_properties(target: str) -> LightProperties:
         color_b=color.get("b"),
         color_temperature=raw.get("m_ColorTemperature"),
         bounce_intensity=raw.get("m_BounceIntensity"),
+        range=raw.get("m_Range"),
+        spot_angle=raw.get("m_SpotAngle"),
+        shadow_type=shadow_type,
     )
 
 
@@ -395,12 +416,17 @@ def set_light_properties(
     color: tuple[float, float, float] | None = None,
     color_temperature: float | None = None,
     bounce_intensity: float | None = None,
+    range: float | None = None,
+    spot_angle: float | None = None,
+    shadow_type: str | None = None,
 ) -> None:
     """Set a Light component's mood-relevant fields by instance_id. Omit a
     field to leave it unchanged. color is (r, g, b), each 0-1.
     color_temperature is Kelvin and only visibly applies while
     m_UseColorTemperature is true (true by default on this scene's light —
-    not managed here, see docs if that ever needs toggling)."""
+    not managed here, see docs if that ever needs toggling). range is
+    world-space units (Point/Spot only). spot_angle is degrees, full cone
+    width (Spot only). shadow_type is 'none'/'hard'/'soft'."""
     calls: list[tuple[str, object]] = []
     if intensity is not None:
         calls.append(("m_Intensity", intensity))
@@ -410,6 +436,12 @@ def set_light_properties(
         calls.append(("m_ColorTemperature", color_temperature))
     if bounce_intensity is not None:
         calls.append(("m_BounceIntensity", bounce_intensity))
+    if range is not None:
+        calls.append(("m_Range", range))
+    if spot_angle is not None:
+        calls.append(("m_SpotAngle", spot_angle))
+    if shadow_type is not None:
+        calls.append(("m_Shadows.m_Type", _SHADOW_TYPE_NAME_TO_INT[shadow_type]))
 
     for field, value in calls:
         subprocess.run(
@@ -521,6 +553,33 @@ def create_light(
             text=True,
             check=True,
         )
+
+    # Unity's own Light component default is "No Shadows" (confirmed live,
+    # 2026-11-24) — silently making real directional shadow shape
+    # impossible regardless of intensity/range. Soft is a sane default a
+    # mood-lighting agent almost always wants; set_light_properties can
+    # still override to 'none'/'hard' afterward if a specific mood calls
+    # for it.
+    subprocess.run(
+        [
+            UNITY_EXE,
+            "command",
+            "component set_field",
+            "--target",
+            instance_id,
+            "--component",
+            "Light",
+            "--field",
+            "m_Shadows.m_Type",
+            "--value",
+            str(_SHADOW_TYPE_NAME_TO_INT["soft"]),
+            "--project-path",
+            PROJECT_PATH,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
 
     return instance_id
 

@@ -179,11 +179,33 @@ def set_light_properties(
     color_b: float | None = None,
     color_temperature: float | None = None,
     bounce_intensity: float | None = None,
+    range: float | None = None,
+    spot_angle: float | None = None,
+    shadow_type: str | None = None,
 ) -> str:
     """Set a Light's intensity, color (RGB, each 0-1, give all 3 together),
     color temperature in Kelvin (lower=warmer, e.g. 1800=candle, 6500=cool
-    daylight), and/or bounce/indirect intensity. Omit any field to leave it
-    unchanged. target is the instance_id from the scene context."""
+    daylight), bounce/indirect intensity, range, spot_angle, and/or
+    shadow_type. Omit any field to leave it unchanged. target is the
+    instance_id from the scene context.
+
+    range (Point/Spot only, world-space units the light reaches) is the
+    lever that controls whether a light reads as a TIGHT CONTAINED POOL
+    (small range) versus FLOODING THE WHOLE ROOM EVENLY (large range) —
+    this is usually what separates a dramatic key light from a generic
+    room fill. Size it relative to get_scene_bounds()'s diagonal, not a
+    fixed number: a range anywhere near the room's own diagonal floods
+    everything, a range a small fraction of it creates a real pool.
+
+    spot_angle (Spot only, degrees, full cone width 1-179) controls beam
+    width — narrow for a tight dramatic beam, wide for a broad soft wash.
+
+    shadow_type is 'none', 'hard', or 'soft'. CRITICAL: a light created
+    via create_light defaults to 'soft' already, but if you ever see
+    'none' on a light you want to cast real shadow shape, set it
+    explicitly — no amount of intensity or range alone produces a visible
+    shadow if shadow_type is 'none', that is a hard requirement, not a
+    style choice."""
     color = None
     if color_r is not None or color_g is not None or color_b is not None:
         if color_r is None or color_g is None or color_b is None:
@@ -204,6 +226,12 @@ def set_light_properties(
         return f"Rejected: intensity {intensity} is out of the sane range (0, 20]. Pick a smaller positive value."
     if bounce_intensity is not None and not (0 <= bounce_intensity <= 5):
         return f"Rejected: bounce_intensity {bounce_intensity} is out of the sane range [0, 5]."
+    if range is not None and range <= 0:
+        return f"Rejected: range {range} must be positive. Compare against get_scene_bounds()'s diagonal for a sensible size."
+    if spot_angle is not None and not (1 <= spot_angle <= 179):
+        return f"Rejected: spot_angle {spot_angle} is out of Unity's valid range [1, 179] degrees."
+    if shadow_type is not None and shadow_type not in ("none", "hard", "soft"):
+        return f"Rejected: shadow_type must be 'none', 'hard', or 'soft', got {shadow_type!r}."
 
     _set_light_properties(
         target=target,
@@ -211,6 +239,9 @@ def set_light_properties(
         color=color,
         color_temperature=color_temperature,
         bounce_intensity=bounce_intensity,
+        range=range,
+        spot_angle=spot_angle,
+        shadow_type=shadow_type,
     )
     current = get_light_properties(target)
     return f"Updated light {target}: {current}"

@@ -609,3 +609,119 @@ whose instructions don't match the real human bar for its target concept
 treating as a pattern: whenever a judge's pass rate feels wrong by eye,
 suspect the judge's own instructions before suspecting the agent or the
 model.
+
+## Rebuilding RESTRAINED from real reference images — found a real tooling gap, not an instructions gap (2026-11-24)
+
+**Context.** Eran provided 11 real game-lighting reference images (one
+per mood from `light_mood_setup/`, covering Alien Isolation-style horror,
+a warm-lamp horror variant, LA Noire-style noir, an Alan Wake 2
+streetlamp thriller shot, a Control-style eerie lab corridor, a hazy
+post-apocalyptic ruin, plus golden hour/zen/dreamlike/festive/cozy café),
+a technical-artist palette/contrast reference table, and links to
+professional lighting breakdowns. Decided live: no RAG/retrieval system
+for this material — it's a one-time authoring input to sharpen 4 static
+archetype blocks, not a corpus the agent needs to query live (no
+evidence of the scale that would justify that infra).
+
+**What the images actually showed, examined directly, not inferred from
+adjectives:** horror, horror2, noir, thriller, and eerie_lab all share
+ONE real technique — a single dominant light source producing EXTREME
+falloff (a genuinely bright pool/cone where the light hits, the rest of
+the frame real near-black by contrast), hard-edged shadow shapes, very
+high contrast. `post_apocalyptic` breaks that pattern entirely: diffuse,
+overcast, hazy daylight, NO single key light, medium contrast,
+desaturated — confirmed independently by the palette table ("medium
+contrast, dusty, desaturated" vs horror/noir's "very high"). This meant
+`post_apocalyptic` had been wrongly lumped into the same `RESTRAINED`
+technique as horror/noir, likely the real reason it kept drifting
+toward the near-black guardrail — it was being pushed toward a contrast
+target that was never right for it.
+
+**Rebuilt `RESTRAINED`** into two named sub-techniques within the same
+archetype enum value (no schema change, just sharper instructions):
+THREAT/DRAMATIC (horror/noir/thriller/eerie_lab — single key light,
+extreme falloff, very high contrast) vs DESOLATE/ATMOSPHERIC
+(post-apocalyptic/ruins — diffuse overcast haze, no key light, medium
+contrast, explicitly told NOT to push toward black).
+
+**Re-tested horror/noir/thriller/post_apocalyptic: all 4 still FAILED**,
+and — the decisive signal — the judge's complaint was WORD FOR WORD
+identical to before the rewrite ("no directional shadows, no strong key
+light"). Per this project's own `llm-output-diagnosis` method: unambiguous,
+specific instructions that still don't change behavior at all point past
+"instructions" to the next layer, tools/architecture.
+
+**Audited `tools.py`/`unity_bridge.py` directly and found a real,
+concrete capability gap**: `set_light_properties` never exposed `range`
+(how far a light reaches) or `spot_angle` (cone width) at all — and,
+confirmed LIVE by creating a real test light and reading its raw fields,
+**every agent-created light defaults to `m_Shadows.m_Type: "No Shadows"`**.
+No amount of instruction wording could ever have produced a visible
+shadow on an agent-created light, the capability was off at the
+component level the entire time. The scene's 2 original lights DO have
+shadows enabled, but default to `range=10` (per Unity's component
+default), which floods this whole small room evenly — explaining why
+even manipulating the existing lights never created a real pool-vs-dark
+falloff.
+
+**Fix implemented:**
+- Added `range`, `spot_angle`, `shadow_type` to `LightProperties`,
+  `get_light_properties`, and `set_light_properties` (both the raw
+  bridge function and the agent-facing tool, with guardrails: range > 0,
+  spot_angle in Unity's valid [1, 179], shadow_type one of
+  none/hard/soft).
+- `create_light` now explicitly sets `shadow_type='soft'` at creation
+  instead of silently inheriting Unity's "No Shadows" default.
+- `get_scene_context()` now reports range/spot_angle/shadow_type per
+  light, same fix pattern as the earlier intensity/color blind spot.
+- `RESTRAINED`'s THREAT/DRAMATIC instructions now explicitly tell the
+  agent to size a key light's range as a small fraction of
+  `get_scene_bounds()`'s diagonal and confirm shadow_type is hard/soft,
+  not just "make one light dominant" in the abstract.
+
+**Re-tested `horror`: confirmed the fix is real** — the agent now
+genuinely uses the new levers (asymmetric range per light, e.g. 2.2 vs
+2.8, then 3.2 vs 4.0 across attempts), a real, verifiable behavior
+change, not just new vocabulary in its reasoning. **But the visual
+result still read flat/dim** (confirmed by direct image inspection, not
+score alone) and the score stayed FAIL 5/10.
+
+**New suspected cause for next session, not yet fixed**: the agent
+pairs "make one light dominant" with a GLOBAL exposure/contrast cut via
+`set_color_adjustments`, applied on top of all individual lights'
+output. This likely flattens whatever local brightness differential the
+lights create, since global grading compresses the whole frame's
+exposure uniformly after individual lights render. The agent is also
+not boosting its "dominant" light's intensity meaningfully above the
+room's original baseline (ended up around 1.15 vs. the original scene's
+~2.17) — it's darkening both the dominant and secondary lights, just by
+different amounts, rather than making one genuinely bright against a
+genuinely dark rest-of-frame. This is a different kind of gap than
+tools or instructions — closer to "the agent reasons about each lever
+category (lights vs. global grading) independently, without weighing
+how they combine," which `get_scene_context()`'s existing "these effects
+STACK" warning hints at but doesn't specifically connect to this
+single-key-light case. Tracked as the explicit next discussion, not
+guessed at further in this pass.
+
+## Current gap assessment — instructions, tools, configuration, or architecture? (2026-11-24)
+
+Summary for quick reference, using this project's own `llm-output-diagnosis`
+categories, current as of this session:
+
+| Layer | Verdict | Evidence |
+|---|---|---|
+| **Architecture** (structured output: `mood_breakdown` → `reasoning` → `changes_summary`) | Solid, no known gap | Every attempt produces specific, concrete, non-generic content in all 3 fields across dozens of runs — the `"Done."` bug this fixed never recurred |
+| **Instructions** (judge calibration) | Fixed, confirmed | Decisive proof: changed ONLY wording, same model/settings, behavior flipped completely (horror 7 PASS → 3/5/guardrail-FAIL) |
+| **Instructions** (agent archetype text) | Validated as correct, was blocked by a lower layer | The RESTRAINED rewrite described the right technique accurately (confirmed against real references), but changed nothing until the tools layer below it was fixed — now that tools exist, the agent correctly adopts the new instructed behavior (real asymmetric range usage) |
+| **Tools/capability surface** | WAS the real gap, now fixed | Confirmed live: `range`/`spot_angle`/`shadow_type` were never exposed; every agent-created light defaulted to no shadows at all, a hard capability block no wording could work around |
+| **Configuration** (`ModelSettings`: temperature, reasoning effort) | No identified gap, correctly untouched | No test has isolated a model-capability failure from everything above; touching this now would be a guess, not evidence-driven |
+| **New, not yet categorized cleanly** | Open, next session | Global post-processing (exposure/contrast/vignette/fog) appears to cancel out local per-light brightness differentials the agent creates — not a tools gap (both levers exist and work individually) and not quite an instructions gap (the "effects stack" warning already exists in `get_scene_context()`), more a reasoning-about-combined-effects gap specific to the single-key-light technique |
+
+**The honest overall pattern this session surfaced**: every real
+improvement came from checking the cheapest, most falsifiable layer
+first and only moving down when the evidence demanded it (architecture
+→ instructions → tools), never guessing at model/config fixes without a
+positive test pointing there. That discipline is what turned "the judge
+seems wrong" into two concrete, verified fixes (judge calibration, then
+a real tooling gap) instead of two rounds of blind prompt tweaking.

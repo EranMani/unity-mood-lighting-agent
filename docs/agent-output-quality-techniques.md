@@ -203,3 +203,84 @@ pass threshold (`eerie_lab`/`noir` flipped before with zero code
 changes, see README step 27). One improved run after a prompt/schema
 change is suggestive, not proof of causation — would need several runs
 to actually claim this technique measurably improved pass rates here.
+
+---
+
+## Technique 2: diagnosing model vs. instructions vs. architecture — the order to check, and why
+
+**The problem this solves:** when a pipeline produces a result you
+don't trust (e.g. a judge passing something that visually looks dull,
+not dramatic), there are three structurally different possible causes —
+the model's own capability/configuration, the instructions it was
+given, or the surrounding architecture (schema, field order, what's
+even required) — and they need genuinely different fixes. Guessing
+which one is at fault, or reaching for the most familiar lever
+(`ModelSettings` — temperature, reasoning effort) without evidence,
+wastes effort and can hide the real cause. This came up directly
+2026-11-24: Eran asked, when a judge passes something a human wouldn't,
+how do you know whether to blame the model, the instructions, or the
+architecture — the answer below is the method, with this project's own
+case as the worked example.
+
+**The checking order — cheapest and most likely first, most expensive
+and least likely last:**
+
+1. **Architecture/output structure, check first, free to check.** Open
+   the actual raw structured output, not just the final score/answer.
+   Is a reasoning-style field present, required, and ordered BEFORE the
+   conclusion (see Technique 1 above)? Is it populated with specific,
+   concrete detail, or generic filler that could apply to anything? A
+   thin, generic, or absent reasoning field — or a final answer that
+   doesn't logically follow from its own stated reasoning — points at
+   architecture, not capability. This is the cheapest check (just read
+   the output) and the most common real cause, fix it before anything
+   else.
+
+2. **Instructions/spec, check second.** Read what the model actually
+   said in its reasoning, word for word. The test: *if a smart human
+   intern followed these exact written instructions, and nothing else,
+   would they make the same mistake?* If yes, it's the instructions,
+   not the model. A model that produces coherent, specific, well-
+   grounded reasoning but applies the WRONG criterion (because the
+   instructions never defined that criterion precisely) is doing
+   exactly what it was told — that's a spec bug.
+   - **The decisive proof, not just a guess**: change ONLY the
+     instruction text — same model, same `ModelSettings`, same input —
+     and see if behavior changes. If it does, it was never a model
+     problem; a real capability limitation can't be fixed by words
+     alone. If changing the words changes nothing, that's evidence
+     pointing further down this list.
+
+3. **Model/configuration itself, only with positive evidence, not
+   because 1 and 2 didn't occur to you first.** Suspect this when:
+   instructions are unambiguous and reasoning is required/grounded, yet
+   the final answer still contradicts its own stated reasoning (a real
+   consistency failure); OR the exact sub-skill, isolated in a minimal
+   test with maximum clarity and nothing else in the prompt, still
+   fails (a real capability gap); OR the identical prompt run multiple
+   times with nothing changed gives wildly different results (variance
+   — check `temperature` specifically, that's the one setting that's
+   actually about this). `reasoning_effort`/model tier are worth
+   touching only once one of these is demonstrated with a real test,
+   never as a first guess.
+
+**Worked example from this project (2026-11-24, horror mood):** Eran
+flagged the `horror` and `thriller` result screenshots as visually dull
+despite a 7/10 PASS score. Checked step 1 first: the judge's `reasoning`
+field WAS present, required, and ordered first (Technique 1 was already
+applied) — so architecture wasn't the gap. Checked step 2: read the
+judge's actual reasoning text — it was specific and coherent ("cold
+blue tones, isolated lighting"), not vague or hallucinated, it was
+faithfully describing a real criterion, just the wrong one (conflating
+"cold + dim" with "dramatic"). That's an instructions problem, confirmed
+by the decisive proof: changed ONLY `judge.py`'s instruction text (added
+an explicit "dim ≠ dramatic, real drama needs visible shadow shape"
+clause), same model, same settings, re-ran the identical agent output —
+score dropped from 7 PASS to 3/5/guardrail-rejected. Behavior flipped
+entirely from a pure wording change, which is the clean proof it was
+never a model-capability issue. `ModelSettings` (temperature, reasoning
+effort) was explicitly considered and rejected as the first thing to
+try — no test had been run that isolated model capability from
+instructions, so there was no evidence pointing there, only an untested
+hunch. See `docs/mood-test-results.md`'s "The 8/10 result didn't survive
+human eyes" section for the full incident writeup.
