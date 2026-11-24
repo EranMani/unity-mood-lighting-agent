@@ -303,6 +303,16 @@ VISIBILITY_MEAN_BRIGHTNESS_FLOOR = 10.0  # out of 255
 VISIBILITY_NEAR_BLACK_PCT_CEILING = 90.0  # % of pixels below NEAR_BLACK_THRESHOLD
 NEAR_BLACK_THRESHOLD = 15  # out of 255, per-pixel
 
+# Calibrated live (2026-11-24) against real reference images Eran provided
+# (horror/horror2/noir/thriller/eerie_lab game screenshots) vs this
+# project's own flat/failed agent results, both measured the same way
+# (p90-p10 luminance spread): real references ranged 45-79, our agent's
+# own flat outputs ranged 7-20 — a wide, clean gap. 35 sits comfortably
+# below every real reference and well above anything the agent has
+# produced so far. Revisit only if a genuinely high-contrast PASSING
+# mood trips this floor (not yet observed).
+CONTRAST_SPREAD_FLOOR = 35.0  # p90 - p10 luminance, out of 255
+
 
 class FrameVisibility(BaseModel):
     """Result of checking whether a captured frame has any visible content
@@ -339,6 +349,56 @@ def check_frame_visibility(image_path: str) -> FrameVisibility:
         mean_brightness=round(mean_brightness, 1),
         pct_near_black=round(pct_near_black, 1),
         visible=visible,
+    )
+
+
+class FrameContrast(BaseModel):
+    """Result of checking whether a captured frame has real brightness
+    SPREAD across it (a genuinely bright zone and a genuinely dark zone),
+    as opposed to looking merely dim/dark but uniform. Distinct from
+    FrameVisibility, which only catches the opposite failure (everything
+    pushed to near-black) — a frame can easily pass visibility (not
+    black) while still being flat (no real contrast), which is exactly
+    the failure mode observed in horror/noir/thriller this session."""
+
+    p10: float = Field(description="10th percentile luminance, 0-255 — how dark the dark zone actually gets.")
+    p90: float = Field(description="90th percentile luminance, 0-255 — how bright the bright zone actually gets.")
+    spread: float = Field(description="p90 - p10. Real dramatic lighting measured 45-79 on real game references; this project's own flat failures measured 7-20.")
+    has_real_contrast: bool
+
+
+def check_frame_contrast(image_path: str) -> FrameContrast:
+    """Pure pixel-level check, no LLM — same pattern as
+    check_frame_visibility, but for the OPPOSITE failure mode: a frame
+    that is not near-black (passes visibility) but is still flat/uniform,
+    with no real difference between its brightest and darkest regions.
+    Only meaningful for moods that actually call for high contrast —
+    main.py gates this on mood_breakdown.target_contrast == 'high', a
+    low-contrast mood (soft_ambient, etc.) is SUPPOSED to be flat and
+    should never be rejected by this."""
+    from PIL import Image
+
+    img = Image.open(image_path).convert("L")
+    histogram = img.histogram()  # 256 buckets, index = luminance value
+    total_pixels = img.width * img.height
+
+    def _percentile(pct: float) -> int:
+        target = total_pixels * pct / 100
+        cumulative = 0
+        for luminance, count in enumerate(histogram):
+            cumulative += count
+            if cumulative >= target:
+                return luminance
+        return 255
+
+    p10 = _percentile(10)
+    p90 = _percentile(90)
+    spread = p90 - p10
+    return FrameContrast(
+        p10=float(p10),
+        p90=float(p90),
+        spread=float(spread),
+        has_real_contrast=spread >= CONTRAST_SPREAD_FLOOR,
     )
 
 

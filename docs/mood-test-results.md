@@ -725,3 +725,122 @@ first and only moving down when the evidence demanded it (architecture
 positive test pointing there. That discipline is what turned "the judge
 seems wrong" into two concrete, verified fixes (judge calibration, then
 a real tooling gap) instead of two rounds of blind prompt tweaking.
+
+## Closing the gap-assessment's open item: a deterministic contrast guardrail, a cost-aware MAX_ATTEMPTS experiment, and loosened instructions (2026-11-24)
+
+**Context.** The open item from the gap assessment above was: global
+post-processing seemed to cancel out whatever local brightness
+differential the agent's lights created, leaving `horror` stuck at a
+flat/dim result even after the tooling fix (range/shadow_type). Decided
+live with Eran: a deterministic, measurable check is more enforcing and
+more honest than trying to out-word the problem in prose a third time.
+
+**Technique 1 — calibrate the metric against real data before picking a
+threshold, same discipline as the existing near-black guardrail.**
+Computed `p90 - p10` luminance spread (a measure of real brightness
+contrast across a frame, distinct from mean brightness) on both the
+real reference images Eran provided and this project's own flat/failed
+results:
+
+| Image | p90−p10 spread |
+|---|---|
+| Real horror/noir/thriller/eerie-lab references | 45–79 |
+| This project's own flat agent results | 7–20 |
+| This scene's untouched baseline room (no edits at all) | 59 |
+
+That baseline-room number was the sharpest finding: **the agent's own
+edits were making the room flatter than doing nothing.** Concrete,
+measured proof the approach was actively fighting the mood, not just
+falling short.
+
+**Technique 2 — a second guardrail for the OPPOSITE failure mode,
+gated on the agent's own structured output.** Built `check_frame_contrast()`
+(same shape as the existing `check_frame_visibility()`, pure pixel
+histogram math, no LLM, no numpy dependency — this project's venv
+doesn't have numpy, rewrote with `Image.histogram()` + manual
+percentile-from-cumulative-count, verified it reproduces the same
+numbers as the numpy prototype). Set `CONTRAST_SPREAD_FLOOR = 35`
+(comfortably below every real reference, comfortably above the agent's
+own flat outputs). Gated it on `decision.mood_breakdown.target_contrast
+== "high"` — a low-contrast mood (soft_ambient, etc.) is SUPPOSED to be
+flat and must never be rejected by this. Wired into `main.py`'s attempt
+loop right after the existing visibility guardrail, same pattern: skip
+the judge call entirely on a flat frame, feed back the real numbers
+(p10/p90/spread/floor) plus a concrete hypothesis (no light is
+genuinely dominant, OR global grading is flattening the differential).
+Generalized `_log_guardrail_rejection()` to accept any guardrail
+name + detail dict, not just visibility-specific fields.
+
+**Technique 3 — a bounded, reversible diagnostic experiment instead of
+a permanent cost increase.** Eran's concern: bumping `MAX_ATTEMPTS`
+permanently means more (expensive) lighting-agent calls on every future
+run, even when the judge is never reached. Made `MAX_ATTEMPTS`
+env-overridable (`MAX_ATTEMPTS_DIAGNOSTIC_OVERRIDE`, default stays 3)
+so the experiment could run once, answer the question, and leave zero
+permanent cost behind. Ran `horror` with 7 attempts:
+
+| Attempt | Spread | Outcome |
+|---|---|---|
+| 1 | 16 | Guardrail-rejected (flat) |
+| 2 | 31 | Guardrail-rejected (flat) |
+| 3 | ≥35 | Reached judge, scored 5/10 |
+| 4 | 30 | Guardrail-rejected (flat) |
+| 5 | ≥35 | Reached judge, scored 5/10 |
+| 6 | — | Guardrail-rejected (near-black, overcorrected) |
+| 7 | ≥35 | Reached judge, scored 5/10 |
+
+**Conclusive, not just suggestive**: 3 separate attempts crossed the
+35 floor and every single one scored exactly 5/10, with the judge's
+complaint identical each time ("subtle, not striking"). More attempts
+bought more *chances* to clear the pixel floor, it never bought better
+*quality* — proof `MAX_ATTEMPTS` was never the real bottleneck.
+Reverted to the default of 3 immediately after, no permanent cost
+change.
+
+**Technique 4 — test whether the instructions themselves were the
+actual constraint, not the thing enforcing quality.** Eran's hypothesis:
+the heavily-prescriptive `RESTRAINED` rewrite (explicit range values,
+shadow_type mandates, "avoid" lists, "be conservative with global
+grading") may have been constraining the model into a narrow, mechanical
+solution instead of freeing it to solve the creative problem well.
+Rewrote `RESTRAINED` (and, for consistency, `EXPANSIVE`/`SOFT_AMBIENT`/
+`NATURALISTIC`) down to a short genre/contrast-target compass with an
+explicit "CREATIVE FREEDOM" framing: the two deterministic guardrails
+exist only to catch extreme failures on either side, not to prescribe a
+style, clearing them is not the same as succeeding at the mood, push as
+boldly as judged necessary. Also softened the `TOOLS` section from
+"CRITICAL, often missed" imperative framing back to neutral capability
+description.
+
+**Result, mixed, reported honestly, not cherry-picked:**
+
+| Case | Outcome | Visual check |
+|---|---|---|
+| horror | FAIL 4/10 | **Visibly improved** — real soft-glow pool on the table, genuine darker edges, atmospheric depth, clearly more deliberate than the old flat gray result |
+| noir | FAIL (contrast guardrail) | Still flat, never reached the judge |
+| thriller | FAIL 4/10 | Still evenly lit, no real falloff, same complaint as before |
+| post_apocalyptic | FAIL 4/10 | Still flat/uniform, no real haze/depth |
+
+1 of 4 improved visually (confirmed by direct image inspection, not
+score), the other 3 landed in roughly the same place as every prior
+variant tried today. **Honest conclusion**: looser instructions didn't
+regress anything and genuinely helped in one case, but this isn't a
+clean universal fix either — these 4 specific moods, on this specific
+small room with its existing fixture layout, keep landing in the same
+noisy, borderline zone regardless of which lever gets adjusted (judge
+wording, tooling, prescriptive vs. loose instructions). This now reads
+less like "one more fix will crack it" and more like a genuine content/
+scale ceiling for RESTRAINED moods on THIS scene — the same shape of
+conclusion this project already reached for `festive` earlier in the
+session, just arrived at through a completely different investigation
+path.
+
+**What's being kept, all net-positive regardless of the mixed score
+result:**
+- The contrast guardrail (real, calibrated, catches a genuine failure
+  mode, saves judge-call cost on flat frames).
+- `MAX_ATTEMPTS` staying at 3 (now backed by direct evidence it isn't
+  the bottleneck, not just an assumption).
+- The loosened instructions (simpler, no regressions, one real
+  improvement, removes prose that was quietly fighting the model's own
+  judgment).

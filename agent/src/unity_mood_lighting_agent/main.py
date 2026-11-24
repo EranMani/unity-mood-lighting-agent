@@ -24,6 +24,7 @@ Usage:
 
 import asyncio
 import json
+import os
 import re
 import shutil
 import sys
@@ -37,8 +38,10 @@ from unity_mood_lighting_agent.agent import LightingDecision, agent, get_scene_c
 from unity_mood_lighting_agent.judge import judge_mood_match
 from unity_mood_lighting_agent.tools import cleanup_agent_lights
 from unity_mood_lighting_agent.unity_bridge import (
+    CONTRAST_SPREAD_FLOOR,
     capture_game_view,
     capture_scene_baseline,
+    check_frame_contrast,
     check_frame_visibility,
     ensure_scene_ready,
     get_active_scene,
@@ -49,7 +52,7 @@ from unity_mood_lighting_agent.unity_bridge import (
 
 load_dotenv()
 
-MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS_DIAGNOSTIC_OVERRIDE", 3))  # permanent default stays 3; override is a one-off diagnostic knob, not a config to leave set
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LOG_PATH = REPO_ROOT / "mood_test_log.jsonl"
 SCREENSHOTS_DIR = REPO_ROOT / "screenshots"
@@ -82,14 +85,17 @@ def _log_result(
 def _log_guardrail_rejection(
     task: str,
     attempt: int,
-    visibility,
+    guardrail_name: str,
+    details: dict,
     case_name: str | None = None,
     run_timestamp: datetime | None = None,
 ) -> None:
     """Separate from _log_result — this is a guardrail catch, not a judge
     score. No MoodJudgement exists here (judge was never called, that's
     the whole point — save the LLM call on a frame with nothing to
-    score)."""
+    score). guardrail_name/details generalized 2026-11-24 to cover both
+    the visibility guardrail (near-black) and the contrast guardrail
+    (too flat for a high-contrast mood), same shape, different checks."""
     ts = run_timestamp or datetime.now(timezone.utc)
     entry = {
         "timestamp": ts.isoformat(),
@@ -97,9 +103,8 @@ def _log_guardrail_rejection(
         "task": task,
         "attempts_used": attempt,
         "passed": False,
-        "guardrail_rejected": "visibility",
-        "mean_brightness": visibility.mean_brightness,
-        "pct_near_black": visibility.pct_near_black,
+        "guardrail_rejected": guardrail_name,
+        **details,
     }
     with open(LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
@@ -240,7 +245,11 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                     "color/contrast/shadow shape, not by erasing the image."
                 )
                 if attempt == MAX_ATTEMPTS:
-                    _log_guardrail_rejection(task, attempt, visibility, case_name, run_started_at)
+                    _log_guardrail_rejection(
+                        task, attempt, "visibility",
+                        {"mean_brightness": visibility.mean_brightness, "pct_near_black": visibility.pct_near_black},
+                        case_name, run_started_at,
+                    )
                     result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))
                     shutil.copyfile(result_shot.path, latest_dir / "result.png")
                     print(f"[screenshot] result saved: {result_shot.path} (+ latest/)")
@@ -250,6 +259,48 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                         f"mean_brightness={visibility.mean_brightness}/255)."
                     )
                 continue  # skip the judge entirely, retry without burning that call
+
+            # Second deterministic guardrail, the OPPOSITE failure mode:
+            # a frame that's visible (not near-black) but still flat/
+            # uniform, no real brightness spread between a lit zone and a
+            # dark zone. Only meaningful for moods that actually call for
+            # high contrast — gated on the agent's own target_contrast,
+            # never applied to soft_ambient/low-contrast moods where flat
+            # IS the correct result. Calibrated against real reference
+            # images, see check_frame_contrast()'s docstring.
+            if decision.mood_breakdown.target_contrast.value == "high":
+                contrast = check_frame_contrast(post_attempt_capture.path)
+                if not contrast.has_real_contrast:
+                    print(
+                        f"[guardrail] frame too flat for a high-contrast mood after attempt "
+                        f"{attempt}/{MAX_ATTEMPTS} (p10={contrast.p10}, p90={contrast.p90}, "
+                        f"spread={contrast.spread}, floor={CONTRAST_SPREAD_FLOOR}) — skipping judge call"
+                    )
+                    feedback = (
+                        f"Your last change produced a frame with brightness spread={contrast.spread} "
+                        f"(p10={contrast.p10}, p90={contrast.p90}/255) — too flat for a high-contrast "
+                        f"mood, which needs at least {CONTRAST_SPREAD_FLOOR} spread between its darkest "
+                        "and brightest zones. This usually means no single light is genuinely dominant "
+                        "(push ONE light's intensity clearly above the room's baseline and shrink its "
+                        "range to a tight pool) or global grading is flattening the differential the "
+                        "lights created (ease off post_exposure/contrast/vignette/fog and let the light "
+                        "itself create the contrast)."
+                    )
+                    if attempt == MAX_ATTEMPTS:
+                        _log_guardrail_rejection(
+                            task, attempt, "contrast",
+                            {"p10": contrast.p10, "p90": contrast.p90, "spread": contrast.spread},
+                            case_name, run_started_at,
+                        )
+                        result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))
+                        shutil.copyfile(result_shot.path, latest_dir / "result.png")
+                        print(f"[screenshot] result saved: {result_shot.path} (+ latest/)")
+                        return (
+                            f"Gave up after {MAX_ATTEMPTS} attempts. Final attempt was rejected by "
+                            f"the contrast guardrail (too flat for a high-contrast mood: spread="
+                            f"{contrast.spread}, needed {CONTRAST_SPREAD_FLOOR}+)."
+                        )
+                    continue  # skip the judge entirely, retry without burning that call
 
             passed, judgement = await judge_mood_match(task)
             feedback = ""  # guardrail message (if any) consumed by this attempt, clear it
