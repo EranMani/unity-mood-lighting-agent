@@ -36,6 +36,7 @@ from dotenv import load_dotenv
 
 from unity_mood_lighting_agent.agent import LightingDecision, agent, get_scene_context
 from unity_mood_lighting_agent.judge import judge_mood_match
+from unity_mood_lighting_agent.spatial_agent import ensure_spatial_breakdown, load_cached_spatial_breakdown
 from unity_mood_lighting_agent.tools import cleanup_agent_lights
 from unity_mood_lighting_agent.unity_bridge import (
     CONTRAST_SPREAD_FLOOR,
@@ -140,6 +141,20 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
         f"[scene] ready: {readiness['light_count']} light(s) ({readiness['lights_fixed']} set to Realtime), "
         f"{readiness['probe_count']} probe(s) ({readiness['probes_fixed']} set to Realtime), "
         f"volume_created={readiness['volume_created']}, baseline_light_created={readiness['baseline_light_created']}"
+    )
+
+    # Spatial ground-base (Eran's call, 2026-11-24): create-if-missing,
+    # cached per scene — geometry doesn't change between moods or
+    # attempts, so this runs the spatial agent AT MOST ONCE per scene,
+    # ever. Must happen here (awaited, before any attempt) rather than
+    # lazily inside get_scene_context(), which is sync and called fresh
+    # every attempt — see spatial_agent.py's module docstring.
+    active_scene_path = get_active_scene().path
+    spatial_cache_hit = load_cached_spatial_breakdown(active_scene_path) is not None
+    spatial_breakdown = await ensure_spatial_breakdown(active_scene_path)
+    print(
+        f"[spatial] {'cache hit' if spatial_cache_hit else 'computed fresh'} — "
+        f"{len(spatial_breakdown.anchors)} anchor(s)"
     )
 
     # Screenshot pair for visual before/after comparison — root-level

@@ -1,0 +1,53 @@
+{
+  "reasoning": "The room has three clear spatial zones: a back-wall cluster of tall fixtures and wall-mounted objects, a central social cluster around the table/chair, and a left-side/open-floor zone around the bed and arcade area. There’s also a smaller right-wall zone near the dispenser and cabinet. Good lighting anchors should spread across these zones and sit just off the geometry so lights can be placed without intersecting objects.",
+  "anchors": [
+    {
+      "anchor_object": "Cosmic_retro_mesa_Projector",
+      "anchor_name": "Projector",
+      "traits": "Compact object in the back-central wall cluster, with open floor space in front and nearby vertical surfaces for side or overhead placement.",
+      "suggested_light_position_x": 3.45,
+      "suggested_light_position_y": 1.1,
+      "suggested_light_position_z": -1.15
+    },
+    {
+      "anchor_object": "Cosmic_retro_mesa_chair_comfy_orange",
+      "anchor_name": "Chair_comfy_orange",
+      "traits": "Tall, isolated piece near the back-center of the room, surrounded by usable open space on multiple sides.",
+      "suggested_light_position_x": 4.15,
+      "suggested_light_position_y": 0.2,
+      "suggested_light_position_z": -4.1
+    },
+    {
+      "anchor_object": "Cosmic_retro_mesa_table_small_square",
+      "anchor_name": "Table_small_square",
+      "traits": "Central low furniture with several small items on top, surrounded by open walking space and clear room to place a light above or beside it.",
+      "suggested_light_position_x": 5.55,
+      "suggested_light_position_y": 0.55,
+      "suggested_light_position_z": -2.6
+    },
+    {
+      "anchor_object": "Cosmic_retro_mesa_bed_simple",
+      "anchor_name": "Bed_simple",
+      "traits": "Large horizontal form along the left-middle edge, with a broad surface and open floor on its outer side for a neighboring light.",
+      "suggested_light_position_x": 6.05,
+      "suggested_light_position_y": 0.1,
+      "suggested_light_position_z": -4.95
+    },
+    {
+      "anchor_object": "Cosmic_retro_mesa_arcade_machine_games",
+      "anchor_name": "Arcade_machine_games",
+      "traits": "Tall vertical object near the right-back edge, close to the wall and next to other tall fixtures, allowing a narrow side-light position.",
+      "suggested_light_position_x": 5.55,
+      "suggested_light_position_y": 0.1,
+      "suggested_light_position_z": -5.05
+    },
+    {
+      "anchor_object": "Cosmic_retro_mesa_shelf_wall_2slot",
+      "anchor_name": "Shelf_wall_2slot",
+      "traits": "Wall-mounted vertical fixture near the back-left wall, with limited depth and a clean gap in front for a light to sit off the wall.",
+      "suggested_light_position_x": 3.95,
+      "suggested_light_position_y": 1.05,
+      "suggested_light_position_z": -5.2
+    }
+  ]
+}

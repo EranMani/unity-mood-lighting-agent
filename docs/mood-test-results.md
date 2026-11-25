@@ -1040,3 +1040,66 @@ is the real next step before drawing any conclusion.
 **Final clean run, 4 self-selected targets**: 3/4 full deterministic pass (correct target hit via raycast, sane distance, in bounds), 3/4 reasoning-consistent, 3/4 honest. The one failure was the model hallucinating an invalid light instance_id — it couldn't act, and it HONESTLY reported `gave_up_no_change` rather than fabricating success, exactly the behavior the honesty check exists to verify. 2 distinct targets picked across 4 runs (repeated one), genuine variety, not the "same lazy spot" failure mode, though not maximally diverse either.
 
 **Conclusion**: the model genuinely has real spatial reasoning capability — correct position judgment, correct aiming, adaptive retry on guardrail rejection (seen earlier this session: 3 candidate positions tried before landing on one that worked), and now honest self-reporting on failure. The entire earlier "the agent can't execute spatial placement" read on this session's data was caused by this project's own infrastructure bugs (world/local position mismatch, missing baseline restore fields, a too-loose guardrail), not a model capability gap. Next: Eran has architecture questions about how to apply this back to the main mood-lighting attempt loop — to be continued in the next session segment.
+
+## Spatial agent built as a separate, cached, mood-blind "ground base" (2026-11-24, continued)
+
+**Architecture decision, Eran's call**: spatial reasoning (now proven
+real) and mood/lighting-technique reasoning stay as two SEPARATE
+agents, not folded into one. Pushed back on one detail before building:
+should the spatial agent know the mood too? No — kept it strictly
+MOOD-BLIND, pure geometry only. Two reasons: (1) a scene's geometry
+doesn't change between moods or retry attempts, so a mood-blind
+breakdown is cacheable and reusable across EVERY mood/attempt for that
+scene, computed once, ever; a mood-aware version would need a fresh
+call per mood, losing that; (2) avoids two agents independently
+guessing at mood strategy with no guarantee they agree — archetype/
+contrast-target judgment stays exclusively the lighting agent's job.
+
+**Built `spatial_agent.py`**: a tool-less (pure analysis, never moves
+anything), cheap single-call agent producing a `SpatialBreakdown`
+(reasoning + 3-6 `SpatialAnchor`s, each with geometric-only traits —
+compact/isolated vs large/central vs near-a-wall — and a concrete
+suggested world-space position). Cached per scene (same safe-filename
+convention as `unity_bridge.py`'s scene_baselines, under
+`data/spatial_breakdowns/`) via `ensure_spatial_breakdown()`
+(create-if-missing, ASYNC since a cache miss calls the LLM) and
+`load_cached_spatial_breakdown()` (pure sync disk read, safe to call
+from inside `agent.py`'s sync `get_scene_context()` — the async create
+step always runs once near the top of `main.py`'s `run()`, before any
+attempt, so by the time `get_scene_context()` reads it the cache is
+guaranteed to already exist).
+
+**Hit one real schema bug**: `tuple[float, float, float]` as a
+structured-output field type failed OpenAI's strict schema validation
+("array schema missing items"). Fixed by splitting into 3 separate
+`_x`/`_y`/`_z` float fields, matching this project's own established
+convention everywhere else (LightProperties' `color_r`/`color_g`/
+`color_b`, not a tuple) — should have followed it the first time.
+
+**Wired into `get_scene_context()`** as an extra appended section
+(Eran's call), advisory, not a constraint — the lighting agent keeps
+its full existing toolset and creative freedom to deviate from the
+suggestions.
+
+**Result on the 2 struggling cases, by Eran's own stated test
+criteria** (run them, see if score improves, keep it if yes, trivially
+revert if no): **0/2 passed, no clear score win yet.**
+- `horror`: FAIL (4/10). Cache hit confirmed working on a second run
+  (no wasted re-computation). Same root problem as before: key light
+  intensity stayed timid (0.55 max), never created real brightness.
+- `thriller`: FAIL (contrast guardrail, spread capped at 19-25 vs the
+  35 floor). Genuinely different, better-grounded reasoning this time
+  though — attempt 1 explicitly referenced the spatial anchor ("created
+  a new hard-edged spot key near the chair/table area"), and intensity
+  escalated the right direction across attempts (1.8 -> 3.2), just not
+  far enough.
+
+**Honest conclusion**: the spatial ground-base is working exactly as
+designed architecturally (cached, reused, genuinely anchor-referenced
+reasoning now shows up in the model's own text) — it fixed the
+POSITION half of the problem. It was never going to fix the OTHER,
+separately-diagnosed problem from earlier this session (key-light
+intensity calibrated to a self-invented, too-timid order of magnitude,
+unrelated to WHERE the light sits). Keeping it (cheap, sound, no
+regression, real qualitative improvement) — intensity calibration is
+still the open item, to be tackled next, separately.

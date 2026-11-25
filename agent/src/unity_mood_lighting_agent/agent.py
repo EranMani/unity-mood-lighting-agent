@@ -25,6 +25,7 @@ from enum import Enum
 from agents import Agent
 from pydantic import BaseModel, Field
 
+from unity_mood_lighting_agent.spatial_agent import format_spatial_breakdown_for_prompt, load_cached_spatial_breakdown
 from unity_mood_lighting_agent.tools import (
     aim_light_at,
     create_light,
@@ -38,6 +39,7 @@ from unity_mood_lighting_agent.tools import (
     set_vignette,
 )
 from unity_mood_lighting_agent.unity_bridge import (
+    get_active_scene,
     get_ambient,
     get_color_adjustments,
     get_fog,
@@ -263,7 +265,14 @@ def get_scene_context() -> str:
         "scene regardless of any individual light — Unity's default is 1.0; this is "
         "usually why a dark zone won't go near-black even with a light's range/"
         "intensity pulled right down. Low (0.0-0.15) for dramatic moods, near-default "
-        "for diffuse/soft ones.)"
+        f"for diffuse/soft ones.)"
     )
 
-    return f"{transforms_section}\n\n{bounds_section}\n\n{post_processing_section}"
+    spatial_breakdown = load_cached_spatial_breakdown(get_active_scene().path)
+    spatial_section = (
+        format_spatial_breakdown_for_prompt(spatial_breakdown)
+        if spatial_breakdown is not None
+        else ""  # no cache yet for this scene — main.py's run() ensures one exists before any attempt
+    )
+
+    return f"{transforms_section}\n\n{bounds_section}\n\n{post_processing_section}\n\n{spatial_section}"
