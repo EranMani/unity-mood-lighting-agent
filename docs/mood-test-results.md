@@ -1220,3 +1220,249 @@ reaching the judge in both cases — the new lever gets used but never
 actually scored. This is now a distinct, scoped-down problem
 (overcorrection on the attempt that diversifies), not the original
 "stuck on 1-2 levers forever" problem, which this change resolved.
+
+## Session summary (2026-11-25): the real culprit was a corrupted baseline, not a model-capability gap — full writeup
+
+This covers the rest of the 2026-11-25 session: mandatory-transform
+enforcement, the discovery that the "baseline" every attempt was
+restoring to was itself corrupted and near-black, and the render-
+pipeline-compounding finding that explains why grading alone could
+crush an otherwise well-lit frame. Written up in full because this
+segment reframes a large fraction of the session's earlier findings.
+
+### Issue 1: mandatory per-attempt transform enforcement, and the tension it exposed
+
+**Context**: the lever-diversity fix (previous section) worked, but
+only loosely — an attempt would eventually touch position, not every
+attempt. Eran's call: make it a HARD requirement, not a stronger
+prompt, consistent with this project's whole pattern (code enforces,
+prompts don't).
+
+**Built**: a new guardrail in `main.py`'s attempt loop — if neither
+`position` nor `rotation` is in the verified lever diff for an
+attempt, reject it before the judge call (same shape as the
+visibility/contrast guardrails), feed back "you MUST move or rotate a
+light this attempt," retry free.
+
+**Found and fixed a real bug in the guardrail itself**: it initially
+only credited an EXISTING light's position/rotation change, not a
+NEWLY CREATED light's placement — meaning an attempt that created a
+well-placed new light (exactly the behavior we wanted) still failed
+the transform-mandate check and had to make a redundant, pointless
+extra move. Fixed `_diff_levers()` to count a light's creation as a
+position+rotation change in its own right (placing a brand-new light
+IS a spatial decision).
+
+**Found a real tension, reported honestly rather than papered over**:
+once a light already exists at a sensible position, a LATER attempt's
+most sensible move might genuinely be "don't move anything, just
+recover from the previous attempt's overcorrection" — but the hard
+per-attempt mandate rejected that sensible recovery anyway, burning
+the run's last attempt on the mandate instead of ever reaching the
+judge. Flagged a fix (require it once per RUN via the already-tracked
+`levers_touched_this_run` set, not every single attempt) but did not
+implement it — superseded by the baseline discovery below, which
+turned out to be the dominant issue.
+
+### Issue 2: Eran's hunch — "does the agent only ever work with existing lights?" — confirmed with real data
+
+Checked directly: across 2 full eval runs (6 attempts total), light
+count stayed at exactly 2 every single attempt. `create_light`/
+`create_light_near` are registered, available tools, never called
+once. Same root pattern as the lever-diversity gap, one level up:
+given an existing option and a from-scratch option, the agent always
+takes the existing one. Fixed with an instructions addition
+("EXISTING LIGHTS ARE NOT A CONSTRAINT") explicitly telling it a new
+light is a normal, equally-valid move, not a last resort — confirmed
+working on the very next test run (it created a new light on attempt
+2, the first time all session).
+
+### Issue 3 (the big one): "wait, look at the baseline screenshot — it's already black"
+
+**Eran caught this by actually looking at the screenshot**, not by
+more guardrail-tuning: "the baseline is not the real original scene,
+its like the latest result which is also black." Checked immediately
+with `vision_analyze` on `screenshots/horror/latest/baseline.png` —
+confirmed, the "baseline" (the state every attempt restores to before
+starting) was itself a near-black room.
+
+**Root cause, confirmed by reading the actual `.unity` scene file
+directly** (untouched on disk, since the live Unity Editor had been
+running continuously, unsaved, for the entire multi-hour session):
+
+| | Real original (`.unity` file + Volume asset) | What every run restored to |
+|---|---|---|
+| Light "Point Light (4)" intensity | **2.17** | 0.001 |
+| Light "Point Light (3)" intensity | **0.81** | 0.02 |
+| Ambient intensity | **1.0** | 0.0 |
+| ColorAdjustments post_exposure | **+0.39** | -0.15 |
+| ColorAdjustments contrast | **17.6** | 32.0 |
+| ColorAdjustments saturation | **+7.8** | -12.0 |
+| Vignette | **doesn't exist in the original Volume at all** | intensity 0.38 |
+
+**Why this happened**: `capture_scene_baseline()` captures once per
+scene and never overwrites, specifically so it'd grab the true
+original before anything touched it. But by the time it was first
+called this session, the live Editor had already been running unsaved
+through hours of earlier mood tests. It captured already-darkened test
+residue and every subsequent run treated that as gospel. Every attempt
+started from near-black, so of course every attempt kept ending in
+near-black — there was barely any room left below the floor it was
+already standing on. This explains a large fraction of the session's
+earlier findings (the ambient fix, the contrast-floor tuning, the
+brightness-anchor calibration, the "capped at 5/10" plateau, the
+oscillation into overcorrection) — all of it was downstream of testing
+against a broken starting point, not a model-capability gap.
+
+**Fix, applied live and verified**:
+1. Read the true values directly from the `.unity` scene file and its
+   `Global Volume mesa_Free.asset` (lights, ambient, fog, color
+   adjustments — matched by GameObject name, e.g. fileID 507586010 =
+   "Point Light (4)").
+2. Pushed them into the live Editor via the existing `unity_bridge`
+   setter functions (not a new mechanism — this alone is evidence the
+   existing tools were fine, only the cached data was wrong).
+3. Deleted the corrupted baseline JSON cache, recaptured fresh.
+4. Verified with `measure_frame_brightness()` and `vision_analyze` on
+   an actual screenshot: mean brightness went from 13.3 to **86.5**,
+   p90 from 25.0 to **112.0** — a completely normal, readable room,
+   the first time it had actually been seen properly lit all session.
+5. **Saved the Unity scene** (`unity.exe command scene save`) to lock
+   the fix in — critical, since the Editor had been unsaved this whole
+   time and a crash/restart before saving would have lost it.
+
+**Side effect caught and cleaned up before committing**: the earlier
+`rm -f .../scene_baselines/*.json` glob (used twice this session to
+force a clean baseline recapture) also deleted the UNRELATED Forest
+scene's baseline cache by accident — restored via `git checkout --`.
+Also found `set_skybox`'s exposure/rotation params mutate the SHARED
+`.mat` asset file in place (not scoped to the current session/scene) —
+a real design risk worth fixing later (it should probably clone a
+scene-local material instead of mutating the shared one), reverted the
+incidental change for now, flagged as technical debt.
+
+### Issue 4: re-tested from the real baseline — and found a NEW, more specific problem
+
+Horror re-run from the corrected baseline: attempt 1 landed p10=7,
+p90=35, spread=28 — closer to the 35 contrast floor than any attempt
+all session, with a believable light setup (not an overcorrected
+mess). Real, measurable progress from the baseline fix alone.
+
+But a new pattern showed up clearly once the "always near-black to
+start with" noise was removed: `global_grading` (contrast, saturation,
+vignette, post_exposure) kept escalating monotonically attempt over
+attempt (contrast 38→52→68, saturation -12→-18→-28, vignette
+0.28→0.38→0.5) regardless of what the lights were doing. By attempt 3,
+TWO agent-created lights at genuinely strong intensity (14 and 8.5)
+coexisted with a scene that still rendered 100% black (mean
+brightness=0.1/255).
+
+**Eran's question: "how come we get a black color with all the
+lights? is it the post-processing?"** — answered empirically, not by
+guessing. Reproduced attempt 3's exact state live and isolated each
+post-processing knob one at a time:
+
+| State | mean brightness |
+|---|---|
+| All grading neutral (same lights) | 38.4 |
+| + post_exposure alone | 33.3 |
+| + contrast alone | 21.2 |
+| + vignette alone | 15.4 |
+| + fog alone | 38.9 (negligible) |
+| + post_exposure + contrast + saturation + color_filter together | 9.9 |
+| + vignette ALSO stacked on top of those | **0.4** |
+| + fog on top of that | 0.1 |
+
+**Confirmed: yes, it's post-processing, not the lights** — but more
+precisely, no single knob is individually devastating; it's the
+STACK. Each post-processing stage transforms the OUTPUT of the
+previous stage, not the original render, so moderate-looking values
+compound multiplicatively in series rather than adding. Fog turned out
+to be a red herring in this scene (negligible effect at the ranges
+used). Vignette was the specific final blow that tipped an already-
+darkened (but not yet black) image into total black.
+
+### Fix 4a: teach the agent the real render pipeline + division of responsibility
+
+Eran's proposal: "maybe we should define the lighting pipeline to the
+agent in a constructive way... use post-processing to get the basic
+ground mood, then use lights to enhance it... thinking about them as a
+whole, not single attributes." Reframed slightly during discussion:
+not strict rendering order as a literal instruction sequence, but a
+division of responsibility — **lights are the ONLY stage that can
+create LOCAL contrast** (one area bright, another dark); post-
+processing reshapes the WHOLE frame globally afterward and can't
+invent new local differentiation, so it should be a light-touch
+finishing pass, not the primary dramatic mechanism. Added a new
+"RENDER PIPELINE ORDER" instructions block in `agent.py` teaching this
+explicitly, grounded in the exact measured numbers above (not an
+abstract warning — a concrete, scene-specific anchor the agent can
+reason from).
+
+### Fix 4b: a pre-render grading-severity guardrail — pure arithmetic, zero render cost
+
+Built `_grading_severity()` in `main.py`: a heuristic score summing
+`|post_exposure| + contrast/50 + |saturation|/50 + vignette*1.5 +
+color_filter_deviation` — deliberately additive in the formula to
+mirror the fact that each term is a SEPARATE multiplicative pass in
+the real pipeline (summing proxies for compounding). Runs on the
+decision's own already-diffed values, before any screenshot — catches
+a likely crush before paying for ANY render or judge call, not just
+before the judge call like the existing visibility/contrast
+guardrails.
+
+**Calibration caught a near-miss before shipping it**: the first
+proposed floor (1.8) was checked against horror attempt 1's REAL
+values from the corrected-baseline run (the closest-to-passing attempt
+all session) and would have false-positive rejected it (severity
+~1.88). Raised the floor to 2.6 — safely above that legitimate
+attempt, still below the measured ~2.5 first-drop point and ~3.25
+full-crush point. Documented explicitly in the code as calibrated
+against exactly one measured case, to revisit if it over/under-
+triggers on other scenes.
+
+**Result, re-tested**: ran horror again with both fixes in place.
+Attempt 2's grading severity (2.96) was caught and rejected BEFORE any
+render/judge cost. Attempt 3 pulled grading back to severity 1.67 and
+— for the first time this entire session — the run did NOT crash to
+black. It reached the judge: score 4/10, with a completely different
+and far more mundane complaint than before: *"extremely dark and
+heavily underexposed... more like the scene was dimmed than
+deliberately lit for tension"* — underlit, not crushed. Still a fail,
+but a different, much more tractable class of failure (simple
+calibration, not a structural black-hole bug) — exactly the kind of
+thing the existing judge-feedback retry loop is designed to fix with
+more iterations.
+
+### What worked this session (techniques, for reuse)
+
+- **Empirical isolation testing over guessing**: when asked "is it the
+  post-processing?", reproduced the exact failing state live and
+  toggled ONE knob at a time before answering — found the real
+  mechanism (compounding, not any single value) instead of a plausible
+  but wrong guess.
+- **Reading the actual source-of-truth file when live state is
+  suspect**: the live Unity Editor's in-memory state had drifted for
+  hours; the `.unity` scene file + Volume `.asset` on disk were
+  untouched and gave the real ground truth directly via `grep`/`sed`,
+  no Unity API needed.
+- **Distrust self-report, verify with code, and the mismatch check
+  paid for itself live**: `lever_accounting`'s self-report vs. the
+  deterministic scene-state diff caught a real live divergence
+  (reported "rotation" only, verified diff showed "position" too).
+- **Calibrate every guardrail floor against a REAL measured data
+  point, not a guess** — both `CONTRAST_SPREAD_FLOOR` (earlier
+  session) and `GRADING_SEVERITY_FLOOR` (this session) were set from
+  actual before/after measurements on this scene, and the severity
+  floor was specifically checked against a known-good attempt before
+  shipping to catch a false-positive risk.
+- **A hard-requirement guardrail can conflict with genuinely sensible
+  behavior** — the transform mandate blocked a sensible recovery
+  attempt once; worth remembering that "enforce X every single
+  attempt" and "enforce X at least once per run" are different
+  policies with different failure modes, pick deliberately.
+- **When a result seems inexplicable, check the inputs, not just the
+  model** — the session's biggest finding came from Eran looking at a
+  screenshot and asking "wait, is the baseline itself black?" rather
+  than continuing to tune guardrails/instructions against a broken
+  starting point.

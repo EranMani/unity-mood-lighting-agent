@@ -100,7 +100,12 @@ def _snapshot_lever_state() -> dict:
 
 def _diff_levers(before: dict, after: dict) -> set[str]:
     """Which Lever categories genuinely changed between two snapshots —
-    pure value comparison, no LLM, no trusting anyone's self-report."""
+    pure value comparison, no LLM, no trusting anyone's self-report.
+    A newly created light counts as a position/rotation change too
+    (2026-11-25, fixed same day it was found live) — placing a brand
+    new light IS a spatial decision, it shouldn't need a REDUNDANT
+    separate move of an existing light just to satisfy the transform
+    guardrail below."""
     changed = set()
     before_lights = before["lights"]
     after_lights = after["lights"]
@@ -108,8 +113,12 @@ def _diff_levers(before: dict, after: dict) -> set[str]:
     for light_id in all_light_ids:
         b = before_lights.get(light_id)
         a = after_lights.get(light_id)
-        if b is None or a is None:
-            continue  # a light was created/deleted this attempt — not a lever-category diff concern here
+        if b is None:
+            changed.add("position")  # a light was created this attempt — its placement IS a spatial decision
+            changed.add("rotation")
+            continue
+        if a is None:
+            continue  # a light was deleted this attempt — nothing to diff
         if b["pos"] != a["pos"]:
             changed.add("position")
         if b["rot"] != a["rot"]:
@@ -131,6 +140,92 @@ def _diff_levers(before: dict, after: dict) -> set[str]:
     ):
         changed.add("global_grading")
     return changed
+
+
+GRADING_SEVERITY_FLOOR = 2.6  # see _grading_severity docstring for calibration
+
+
+def _grading_severity(snapshot: dict) -> float:
+    """Heuristic estimate of how hard the combined post-processing chain
+    is being pushed, BEFORE any render/screenshot — pure arithmetic on
+    the decision's own numbers, free, and catches a crush before paying
+    for a render+vision guardrail call at all (2026-11-25, Eran's call
+    on the pipeline-compounding finding).
+
+    Calibrated against exactly ONE measured case on this scene (not a
+    validated formula across many scenes — tune the floor if it over/
+    under-triggers elsewhere): neutral grading measured mean=38.4;
+    post_exposure=-0.35 + contrast=68 + saturation=-28 + a moderate
+    color_filter together (severity ~2.5 by this formula) already cut
+    it to ~9.9 (74% loss) with NO vignette involved yet; adding
+    vignette=0.5 on top (severity ~3.25) crushed it to ~0.4 (near-total
+    black). Floor set to 2.6, just above that ~2.5 first-drop point and
+    below the ~3.25 full-crush point — deliberately checked against a
+    REAL legitimate attempt too (horror attempt 1 on the real baseline,
+    the closest-to-passing attempt all session, severity ~1.88 by this
+    formula) to avoid false-positiving on a genuinely decent combo.
+
+    color_adjustments: contrast/50 and |saturation|/50 (both roughly
+    0-100 in this project's range) plus |post_exposure| (roughly -2..2)
+    plus average color_filter deviation from white, all additive
+    because each one is a SEPARATE multiplicative pass in the real
+    pipeline (see agent.py's RENDER PIPELINE ORDER instructions) —
+    stacking them is what compounds, this sum is a proxy for that."""
+    ca = snapshot["color_adjustments"]
+    v = snapshot["vignette"]
+    color_filter_deviation = (
+        abs(1 - ca.get("color_filter_r", 1.0))
+        + abs(1 - ca.get("color_filter_g", 1.0))
+        + abs(1 - ca.get("color_filter_b", 1.0))
+    ) / 3
+    return (
+        abs(ca.get("post_exposure", 0.0))
+        + ca.get("contrast", 0.0) / 50
+        + abs(ca.get("saturation", 0.0)) / 50
+        + v.get("intensity", 0.0) * 1.5
+        + color_filter_deviation
+    )
+
+
+def _light_creation_diff(before: dict, after: dict) -> tuple[set[str], set[str]]:
+    """Separate from _diff_levers (2026-11-25, Eran's hypothesis,
+    confirmed with real data): light count is its own axis, distinct
+    from which PARAMETERS of an existing light changed. Returns
+    (created_ids, deleted_ids) — found live that across every attempt in
+    2 full eval runs, this was ALWAYS (set(), set()): the agent never
+    once called create_light, only ever retuned the scene's original 2
+    fixtures, exactly the same narrow-habit pattern as the lever gap."""
+    before_ids = set(before["lights"])
+    after_ids = set(after["lights"])
+    return after_ids - before_ids, before_ids - after_ids
+
+
+def _describe_lever_diff(before: dict, after: dict) -> str:
+    """Human-readable numeric diff for console output (2026-11-25, Eran
+    asked to actually SEE the diffs between retries, not just category
+    names) — real before -> after values per touched light/setting."""
+    lines = []
+    before_lights = before["lights"]
+    after_lights = after["lights"]
+    created, deleted = _light_creation_diff(before, after)
+    for light_id in created:
+        lines.append(f"    + created light {light_id}: {after_lights[light_id]}")
+    for light_id in deleted:
+        lines.append(f"    - deleted light {light_id}: {before_lights[light_id]}")
+    for light_id in set(before_lights) & set(after_lights):
+        b, a = before_lights[light_id], after_lights[light_id]
+        field_diffs = [f"{k}: {b[k]} -> {a[k]}" for k in b if b[k] != a[k]]
+        if field_diffs:
+            lines.append(f"    light {light_id}: " + "; ".join(field_diffs))
+    for key in ("ambient", "skybox"):
+        if before[key] != after[key]:
+            lines.append(f"    {key}: {before[key]} -> {after[key]}")
+    for key in ("color_adjustments", "vignette", "fog"):
+        b, a = before[key], after[key]
+        field_diffs = [f"{k}: {b[k]} -> {a[k]}" for k in b if b.get(k) != a.get(k)]
+        if field_diffs:
+            lines.append(f"    {key}: " + "; ".join(field_diffs))
+    return "\n".join(lines) if lines else "    (no scene-state change detected)"
 SCREENSHOTS_DIR = REPO_ROOT / "screenshots"
 
 
@@ -277,6 +372,18 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
         print(f"[trace] https://platform.openai.com/traces/trace?trace_id={t.trace_id}")
         for attempt in range(1, MAX_ATTEMPTS + 1):
             prompt_text = f"Current scene objects:\n{get_scene_context()}\n\nTask: {task}"
+            if attempt == 1:
+                prompt_text += (
+                    "\n\nFIRST ATTEMPT STRATEGY (Eran's call, 2026-11-25): if this mood calls for "
+                    "real drama/high contrast, don't start timid. Push your key light's intensity "
+                    "to a deliberately exaggerated, borderline-too-bright peak on this first attempt "
+                    "— overshoot on purpose. Pulling back down from too-bright, with real guardrail/"
+                    "judge feedback telling you exactly how far, is a far easier search than guessing "
+                    "how far to push up from too-dim, which is the failure pattern seen repeatedly "
+                    "when attempts started conservative and either stayed timid or overcorrected into "
+                    "near-black much later. This does not apply to soft/diffuse moods where a gentle "
+                    "intensity genuinely is the right choice."
+                )
             if attempt_history:
                 history_lines = "\n".join(
                     f"- Attempt {h['attempt']}: you did \u2014 {h['action']} \u2192 judge score {h['score']}/10. "
@@ -295,9 +402,7 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                         "deliberate color choices instead of more lights)."
                     )
             if feedback:
-                prompt_text += (
-                    f"\n\nThe scene just went nearly black/unreadable. {feedback}"
-                )
+                prompt_text += f"\n\n{feedback}"
             if levers_touched_this_run:
                 never_touched = sorted({lv.value for lv in Lever} - levers_touched_this_run)
                 prompt_text += (
@@ -359,6 +464,8 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
             # independent of decision.lever_accounting's self-report.
             new_lever_snapshot = _snapshot_lever_state()
             attempt_levers = _diff_levers(prev_lever_snapshot, new_lever_snapshot)
+            created_lights, deleted_lights = _light_creation_diff(prev_lever_snapshot, new_lever_snapshot)
+            print(f"  [diff]\n{_describe_lever_diff(prev_lever_snapshot, new_lever_snapshot)}")
             levers_touched_this_run |= attempt_levers
             prev_lever_snapshot = new_lever_snapshot
             self_reported = {lu.lever.value for lu in decision.lever_accounting if lu.changed}
@@ -368,6 +475,78 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                 f"self_reported_changed={sorted(self_reported)}"
                 + (f" MISMATCH={sorted(mismatch)}" if mismatch else "")
             )
+
+            # Pre-render grading-severity guardrail (2026-11-25, Eran's
+            # call) — pure arithmetic on the values just diffed above, no
+            # render/screenshot cost at all, catches a likely crush
+            # before paying for ANY image capture or judge call. Direct
+            # response to a live finding: compounding post-processing
+            # (not undershooting lights) was what actually crushed
+            # several attempts to full black this session.
+            severity = _grading_severity(new_lever_snapshot)
+            print(f"  [grading] severity={severity:.2f} (floor={GRADING_SEVERITY_FLOOR})")
+            if severity >= GRADING_SEVERITY_FLOOR:
+                print(
+                    f"[guardrail] attempt {attempt}/{MAX_ATTEMPTS} grading severity "
+                    f"{severity:.2f} >= floor {GRADING_SEVERITY_FLOOR} — rejected before "
+                    "any render/judge call"
+                )
+                feedback = (
+                    f"Your last attempt's combined post-processing (post_exposure, contrast, "
+                    f"saturation, color_filter, vignette) scored a severity of {severity:.2f} on a "
+                    f"scale where this scene has been measured to crush to near-total-black once "
+                    f"combined severity passes roughly this range — even though no single value was "
+                    "individually extreme. These stack MULTIPLICATIVELY (each stage transforms the "
+                    "previous stage's already-darkened output), not additively. Pull back grading "
+                    "significantly — if you need more drama, get it from light placement/intensity "
+                    "instead, grading should be a light-touch finishing pass, not the primary "
+                    "dramatic mechanism."
+                )
+                if attempt == MAX_ATTEMPTS:
+                    _log_guardrail_rejection(
+                        task, attempt, "grading_severity", {"severity": severity}, case_name, run_started_at,
+                    )
+                    result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))
+                    shutil.copyfile(result_shot.path, latest_dir / "result.png")
+                    print(f"[screenshot] result saved: {result_shot.path} (+ latest/)")
+                    return (
+                        f"Gave up after {MAX_ATTEMPTS} attempts. Final attempt was rejected: "
+                        f"grading severity {severity:.2f} too high (likely crush)."
+                    )
+                continue  # skip render/judge entirely, retry without burning either cost
+
+            # Hard guardrail (2026-11-25, Eran's explicit call: "its a
+            # must", not a stronger-worded prompt) — require a REAL
+            # transform change every attempt, verified from the diff
+            # above, not the agent's own say-so. Direct response to a
+            # 5-attempt diagnostic that found the agent never once
+            # touched position/rotation on its own, no matter how many
+            # times prose told it to try something different.
+            if "position" not in attempt_levers and "rotation" not in attempt_levers:
+                print(
+                    f"[guardrail] attempt {attempt}/{MAX_ATTEMPTS} changed no light's position or "
+                    "rotation — rejected before judge call"
+                )
+                feedback = (
+                    "Your last attempt did not move or rotate a single light (verified from real "
+                    "scene state, not your own report) — this is now a hard requirement, not optional. "
+                    "You MUST change at least one light's position or rotation this attempt, in "
+                    "addition to whatever else you do. If the existing fixtures' positions genuinely "
+                    "can't serve this mood, create_light/create_light_near a NEW light exactly where "
+                    "the mood needs one instead of only retuning what's already there."
+                )
+                if attempt == MAX_ATTEMPTS:
+                    _log_guardrail_rejection(
+                        task, attempt, "no_transform_change", {}, case_name, run_started_at,
+                    )
+                    result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))
+                    shutil.copyfile(result_shot.path, latest_dir / "result.png")
+                    print(f"[screenshot] result saved: {result_shot.path} (+ latest/)")
+                    return (
+                        f"Gave up after {MAX_ATTEMPTS} attempts. Final attempt was rejected: "
+                        "no light position/rotation was ever changed."
+                    )
+                continue  # skip the judge entirely, retry without burning that call
 
             # Guardrail: check the ACTUAL rendered pixels before paying
             # for the judge LLM call. Found live that per-field clamps
