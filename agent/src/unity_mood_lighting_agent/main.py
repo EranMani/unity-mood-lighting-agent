@@ -34,7 +34,7 @@ from pathlib import Path
 from agents import Runner, trace
 from dotenv import load_dotenv
 
-from unity_mood_lighting_agent.agent import LightingDecision, agent, get_scene_context
+from unity_mood_lighting_agent.agent import LightingDecision, Lever, agent, get_scene_context
 from unity_mood_lighting_agent.judge import judge_mood_match
 from unity_mood_lighting_agent.spatial_agent import ensure_spatial_breakdown, load_cached_spatial_breakdown
 from unity_mood_lighting_agent.tools import cleanup_agent_lights
@@ -47,7 +47,12 @@ from unity_mood_lighting_agent.unity_bridge import (
     check_frame_visibility,
     ensure_scene_ready,
     get_active_scene,
+    get_ambient,
+    get_color_adjustments,
+    get_fog,
     get_light_properties,
+    get_skybox,
+    get_vignette,
     image_to_data_url,
     list_scene_transforms,
     open_scene,
@@ -59,6 +64,73 @@ load_dotenv()
 MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS_DIAGNOSTIC_OVERRIDE", 3))  # permanent default stays 3; override is a one-off diagnostic knob, not a config to leave set
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LOG_PATH = REPO_ROOT / "mood_test_log.jsonl"
+
+
+def _snapshot_lever_state() -> dict:
+    """Real scene-state snapshot for deterministic lever-usage diffing
+    (2026-11-25, Eran's call) — we no longer trust the agent's own
+    self-reported lever_accounting alone, since its changes_summary has
+    been caught diverging from reality before (see docs/mood-test-
+    results.md). Captures everything a Lever category could touch."""
+    lights = {}
+    for o in list_scene_transforms():
+        if not o.is_light:
+            continue
+        lp = get_light_properties(o.instance_id)
+        lights[o.instance_id] = {
+            "pos": (round(o.pos_x or 0.0, 3), round(o.pos_y or 0.0, 3), round(o.pos_z or 0.0, 3)),
+            "rot": (round(o.rot_x or 0.0, 1), round(o.rot_y or 0.0, 1), round(o.rot_z or 0.0, 1)),
+            "intensity": round(lp.intensity, 4),
+            "color": (round(lp.color_r or 0.0, 3), round(lp.color_g or 0.0, 3), round(lp.color_b or 0.0, 3)),
+            "range": round(lp.range, 3) if lp.range is not None else None,
+            "spot_angle": round(lp.spot_angle, 2) if lp.spot_angle is not None else None,
+        }
+    color = get_color_adjustments()
+    vignette = get_vignette()
+    fog = get_fog()
+    return {
+        "lights": lights,
+        "ambient": round(get_ambient().intensity, 4),
+        "skybox": get_skybox().path,
+        "color_adjustments": color.model_dump(),
+        "vignette": vignette.model_dump(),
+        "fog": fog.model_dump(),
+    }
+
+
+def _diff_levers(before: dict, after: dict) -> set[str]:
+    """Which Lever categories genuinely changed between two snapshots —
+    pure value comparison, no LLM, no trusting anyone's self-report."""
+    changed = set()
+    before_lights = before["lights"]
+    after_lights = after["lights"]
+    all_light_ids = set(before_lights) | set(after_lights)
+    for light_id in all_light_ids:
+        b = before_lights.get(light_id)
+        a = after_lights.get(light_id)
+        if b is None or a is None:
+            continue  # a light was created/deleted this attempt — not a lever-category diff concern here
+        if b["pos"] != a["pos"]:
+            changed.add("position")
+        if b["rot"] != a["rot"]:
+            changed.add("rotation")
+        if b["intensity"] != a["intensity"]:
+            changed.add("intensity")
+        if b["range"] != a["range"] or b["spot_angle"] != a["spot_angle"]:
+            changed.add("falloff_range")
+        if b["color"] != a["color"]:
+            changed.add("color")
+    if before["ambient"] != after["ambient"]:
+        changed.add("ambient")
+    if before["skybox"] != after["skybox"]:
+        changed.add("skybox")
+    if (
+        before["color_adjustments"] != after["color_adjustments"]
+        or before["vignette"] != after["vignette"]
+        or before["fog"] != after["fog"]
+    ):
+        changed.add("global_grading")
+    return changed
 SCREENSHOTS_DIR = REPO_ROOT / "screenshots"
 
 
@@ -143,6 +215,16 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
         f"volume_created={readiness['volume_created']}, baseline_light_created={readiness['baseline_light_created']}"
     )
 
+    # Deterministic lever-usage tracking (2026-11-25, Eran's call): real
+    # scene-state diffs, not the agent's own self-reported lever_accounting
+    # — found live that self-reported changes_summary can diverge from
+    # reality. prev_lever_snapshot starts as the true restored baseline;
+    # levers_touched_this_run accumulates across every attempt and is fed
+    # back into the NEXT attempt's prompt so "you've never tried X" is a
+    # verified fact, not a guess.
+    prev_lever_snapshot = _snapshot_lever_state()
+    levers_touched_this_run: set[str] = set()
+
     # Spatial ground-base (Eran's call, 2026-11-24): create-if-missing,
     # cached per scene — geometry doesn't change between moods or
     # attempts, so this runs the spatial agent AT MOST ONCE per scene,
@@ -216,6 +298,19 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                 prompt_text += (
                     f"\n\nThe scene just went nearly black/unreadable. {feedback}"
                 )
+            if levers_touched_this_run:
+                never_touched = sorted({lv.value for lv in Lever} - levers_touched_this_run)
+                prompt_text += (
+                    f"\n\nVERIFIED lever usage so far this run (from real scene-state diffs, "
+                    f"NOT self-report — your own lever_accounting has been caught diverging from "
+                    f"reality before): touched = {sorted(levers_touched_this_run)}."
+                )
+                if never_touched:
+                    prompt_text += (
+                        f" NEVER touched this run = {never_touched}. If your score hasn't been "
+                        "clearly improving, strongly consider one of these — a lever you haven't "
+                        "tried yet is a real, unused option, not evidence it wouldn't help."
+                    )
 
             # Capture the CURRENT live state as a visual starting point —
             # same input_image pattern already proven in judge.py. Numeric
@@ -259,6 +354,20 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                         f"  [light] {o.name}: intensity={lp.intensity} range={lp.range} "
                         f"shadow_type={lp.shadow_type} color=({lp.color_r:.2f},{lp.color_g:.2f},{lp.color_b:.2f})"
                     )
+
+            # Deterministic lever-usage diff, same scene-reads as above —
+            # independent of decision.lever_accounting's self-report.
+            new_lever_snapshot = _snapshot_lever_state()
+            attempt_levers = _diff_levers(prev_lever_snapshot, new_lever_snapshot)
+            levers_touched_this_run |= attempt_levers
+            prev_lever_snapshot = new_lever_snapshot
+            self_reported = {lu.lever.value for lu in decision.lever_accounting if lu.changed}
+            mismatch = self_reported ^ attempt_levers
+            print(
+                f"  [levers] verified_changed={sorted(attempt_levers)} "
+                f"self_reported_changed={sorted(self_reported)}"
+                + (f" MISMATCH={sorted(mismatch)}" if mismatch else "")
+            )
 
             # Guardrail: check the ACTUAL rendered pixels before paying
             # for the judge LLM call. Found live that per-field clamps

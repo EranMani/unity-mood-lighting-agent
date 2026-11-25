@@ -998,6 +998,33 @@ def set_ambient(intensity: float) -> None:
     )
 
 
+class SkyboxState(BaseModel):
+    path: str | None = Field(description="Project-relative path to the current skybox material, or None if unset.")
+
+
+def get_skybox() -> SkyboxState:
+    """Read the scene's current skybox material path — a simple ground-
+    truth reader, distinct from the richer set_skybox(skybox_id, ...)/
+    list_available_skyboxes() pair below (which the agent actually calls
+    to pick a mood-appropriate HDRI by id). Used for baseline capture/
+    restore and lever-usage diffing, not by the agent directly.
+    RenderSettings.ambientMode is Skybox on this scene (confirmed live),
+    so swapping it genuinely changes indoor ambient light color/
+    intensity too, not just a visible backdrop through windows."""
+    script = (
+        "string p = UnityEngine.RenderSettings.skybox != null ? "
+        "UnityEditor.AssetDatabase.GetAssetPath(UnityEngine.RenderSettings.skybox) : null; "
+        "return new { path = p };"
+    )
+    result = subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return SkyboxState(**json.loads(result.stdout))
+
+
 def set_fog(
     enabled: bool | None = None,
     color: tuple[float, float, float] | None = None,

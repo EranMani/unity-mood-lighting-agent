@@ -31,11 +31,13 @@ from unity_mood_lighting_agent.tools import (
     create_light,
     create_light_near,
     delete_light,
+    list_skyboxes,
     set_ambient,
     set_color_adjustments,
     set_fog,
     set_light_properties,
     set_object_transform,
+    set_skybox,
     set_vignette,
 )
 from unity_mood_lighting_agent.unity_bridge import (
@@ -75,6 +77,40 @@ class StrategyArchetype(str, Enum):
     NATURALISTIC = "naturalistic"
 
 
+class Lever(str, Enum):
+    """Every category of change available this attempt — enum, not free
+    text, specifically so LightingDecision can force an explicit
+    per-lever accounting (2026-11-25, Eran's call): found live via a
+    full-trace diagnostic that the agent kept reaching for the exact
+    same 1-2 levers (intensity + global grading) attempt after attempt,
+    never touching position/rotation/skybox even once across 5 attempts
+    on the same case, DESPITE being told explicitly to 'try a different
+    lever' when its score plateaued. Prose nudges alone didn't fix this.
+    This enum doesn't teach what each lever does (that's in the
+    instructions below) — it forces the agent to go through all of them
+    explicitly, every attempt, rather than silently defaulting to a
+    narrow habitual subset."""
+
+    POSITION = "position"
+    ROTATION = "rotation"
+    INTENSITY = "intensity"
+    FALLOFF_RANGE = "falloff_range"
+    COLOR = "color"
+    AMBIENT = "ambient"
+    SKYBOX = "skybox"
+    GLOBAL_GRADING = "global_grading"  # color_adjustments/vignette/fog together
+
+
+class LeverUsage(BaseModel):
+    """One lever's accounting for this attempt. changed=False still
+    REQUIRES a real reason — 'I didn't need it' is a legitimate reason,
+    silently skipping it is not possible with this schema."""
+
+    lever: Lever
+    changed: bool
+    note: str = Field(description="If changed=True: what you did with this lever. If changed=False: why you judged it unnecessary THIS attempt — be honest, not just 'not needed'.")
+
+
 class MoodBreakdown(BaseModel):
     """The agent's own concrete interpretation of the task, generated
     FIRST and before any tool calls — forces committing to a reading of
@@ -94,10 +130,25 @@ class LightingDecision(BaseModel):
     calls, then reason BEFORE summarizing. changes_summary is REQUIRED
     and must be non-trivial — this is what main.py logs into
     attempt_history for the next retry, a bare 'Done.' is not useful
-    there and shouldn't be possible with a described required field."""
+    there and shouldn't be possible with a described required field.
+
+    lever_accounting (2026-11-25, Eran's call): placed AFTER reasoning
+    so the per-lever checklist is informed by the plan, and BEFORE
+    changes_summary so the summary has to stay consistent with what the
+    checklist says actually happened. main.py also independently
+    verifies this against REAL scene-state diffs — see
+    docs/mood-test-results.md's note on why self-reported lever usage
+    isn't trusted alone anymore."""
 
     mood_breakdown: MoodBreakdown
     reasoning: str = Field(description="Given the mood_breakdown, the current scene state, and any previous attempt's score/feedback, explain what you are about to change and why. Write this BEFORE making tool calls.")
+    lever_accounting: list[LeverUsage] = Field(
+        description="EVERY lever in the Lever enum, every attempt, each marked changed=True/False with a real "
+        "reason. Levers are NOT mutually exclusive — combining several in one attempt (e.g. position + "
+        "falloff + skybox together) is the normal expected move, not an edge case. If a prior attempt's "
+        "feedback said to try something different, this is where that actually has to show up as changed=True "
+        "on a NEW lever, not just a reworded reason for skipping it again."
+    )
     changes_summary: str = Field(description="After making your tool calls, concretely describe what you changed this attempt (which lights, which values, which post-processing levers) — specific enough that a reviewer could tell what happened without re-reading the scene. Never just 'Done' or similarly empty.")
 
 
@@ -167,6 +218,36 @@ agent = Agent(
         "results, not a style prescription — clearing them is not the "
         "same as succeeding at the mood. Push as boldly as you judge the "
         "mood actually needs.\n\n"
+        "LEVER MENU: you have 8 independent levers, and they are NOT "
+        "mutually exclusive — combining several per attempt is the "
+        "normal, expected move, not an edge case (e.g. reposition a "
+        "light AND widen its falloff AND swap the skybox AND tighten "
+        "global grading, all in the same attempt, if the mood calls for "
+        "it). Pushing the same 1-2 levers harder across every attempt, "
+        "when the score isn't moving, is the single most common mistake "
+        "— if a lever isn't working, reach for a genuinely DIFFERENT "
+        "one, not a stronger version of the same one:\n"
+        "- POSITION: set_object_transform's position args. Where a "
+        "light physically sits changes everything about pool size and "
+        "what surfaces it grazes — this is rarely the same as wherever "
+        "the scene's original artist happened to leave a fixture.\n"
+        "- ROTATION: set_object_transform's rotation args, or aim_light_at "
+        "for a precise look-at. Which direction a light faces determines "
+        "what it actually illuminates and what shadow shapes result.\n"
+        "- INTENSITY: set_light_properties' intensity. Calibrate against "
+        "the scene's baseline render brightness reported below, not an "
+        "arbitrary number.\n"
+        "- FALLOFF_RANGE: set_light_properties' range/spot_angle. "
+        "Contained pool vs floods-the-room, independent of intensity.\n"
+        "- COLOR: set_light_properties' color/color_temperature.\n"
+        "- AMBIENT: set_ambient. The scene-wide uniform floor under "
+        "every shadow — see the dedicated note on this below.\n"
+        "- SKYBOX: list_skyboxes then set_skybox. Changes indoor ambient "
+        "light color/intensity on scenes where ambient mode is "
+        "Skybox-driven (check get_scene_context), not just a visible "
+        "backdrop — a real, usable lever even indoors.\n"
+        "- GLOBAL_GRADING: set_color_adjustments/set_vignette/set_fog "
+        "together, scene-wide, stacks with every light change.\n\n"
         "TOOLS: set_object_transform repositions/rotates a LIGHT (never "
         "geometry/props, those are out of scope per above). "
         "set_light_properties changes an existing light's "
@@ -191,8 +272,11 @@ agent = Agent(
         "OUTPUT: produce mood_breakdown first (archetype, genre, contrast "
         "level, and visual approach before reasoning), then reasoning "
         "(your plan, grounded in the current state and any prior attempt's "
-        "outcome), then changes_summary (a specific, concrete account of "
-        "what you changed this attempt)."
+        "outcome), then lever_accounting (every lever in the Lever enum, "
+        "marked changed or not with a real reason each — this is checked "
+        "against the real scene state, not just taken on faith), then "
+        "changes_summary (a specific, concrete account of what you "
+        "changed this attempt)."
     ),
     model="gpt-5.4-mini",
     output_type=LightingDecision,
@@ -207,6 +291,8 @@ agent = Agent(
         set_vignette,
         set_fog,
         set_ambient,
+        list_skyboxes,
+        set_skybox,
     ],
 )
 

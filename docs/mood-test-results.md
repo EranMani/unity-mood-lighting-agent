@@ -1150,3 +1150,73 @@ configuration (intensity/color/etc.), or a failure to translate the
 judge's own feedback text into concrete technical parameter changes
 attempt-to-attempt? That inspection is the next session segment's
 starting point, not yet done.
+
+## Full-trace diagnostic finds the real gap: a narrow lever repertoire, not position/execution (2026-11-25)
+
+Ran a 5-attempt diagnostic on `horror` with the full prompt text traced
+every attempt (confirmed the judge-feedback delivery mechanism itself
+works correctly — full reasoning text present verbatim, the "try a
+DIFFERENT lever" nudge fires on schedule). Despite that, across all 5
+attempts the agent **never once touched position or rotation** — every
+attempt was a variation of "tune this light's intensity/color/global
+grading," even when explicitly told the current approach wasn't
+working. It wasn't failing to read judge feedback (confirmed, accurate
+restatement every time) or failing to execute transforms (proven
+capable earlier via spatial_eval) — its own mental menu of "things I
+could try" was just too narrow, and nothing had ever told it
+repositioning or switching anchors belonged on that menu as a lever
+equal to intensity or color.
+
+Clarified for Eran: this was NOT the judge limiting anything — the
+judge only describes what's visually wrong, it has no concept of
+levers or tools at all. The restriction was entirely self-imposed
+agent behavior.
+
+## Lever menu + deterministic lever-usage diffing (2026-11-25)
+
+**Built per Eran's design, confirmed in a 3-part Q&A exchange**: added
+a `Lever` enum (position, rotation, intensity, falloff_range, color,
+ambient, skybox, global_grading) to `LightingDecision`'s structured
+output as `lever_accounting: list[LeverUsage]` — every lever, every
+attempt, explicitly marked `changed` or `changed=False` with a real
+reason. Per-lever explanations (what each one does, when to reach for
+it) live in the instructions as prose, not the schema (OpenAI
+structured output doesn't support per-enum-value descriptions). The
+instructions explicitly state levers are NOT mutually exclusive —
+combining several per attempt is the expected default, not an edge
+case — specifically to avoid the schema backfiring into even narrower
+single-lever attempts.
+
+**Also built, independently, the deterministic half (Eran: "we dont
+trust the lighting agent reasoning enough, so we provide a
+deterministic check as well")**: `_snapshot_lever_state()` /
+`_diff_levers()` in `main.py` capture real scene state (every light's
+position/rotation/intensity/range/color, ambient, skybox, color
+grading/vignette/fog) before and after each attempt, and diff it —
+zero trust in the model's own `lever_accounting` self-report. The
+running set of VERIFIED-touched levers (code, not LLM) is fed into
+every subsequent attempt's prompt: "touched = [...], NEVER touched =
+[...]". A live mismatch printout (`self_reported_changed` vs
+`verified_changed`) runs every attempt as a standing sanity check.
+
+**Also wired `skybox` in as an actual tool** (`list_skyboxes`/
+`set_skybox`) — discovered mid-build that a full HDRI-manifest system
+already existed in `unity_bridge.py` (multiple skyboxes with mood
+metadata: time_of_day, weather, contrast, light_type) but had never
+been exposed via `tools.py`/`agent.py`. This scene's `ambientMode` is
+Skybox-driven, so swapping it genuinely changes indoor light, not just
+a visible backdrop.
+
+**Result, tested on horror + thriller**: the specific gap this was
+built to close IS closed — both cases' final attempt touched POSITION
+for the first time all session (never happened once across 5 attempts
+in the earlier full-trace diagnostic). The mismatch check also caught
+one real live self-report divergence (horror attempt 3: self-reported
+`rotation` only, verified diff showed `position` also changed) —
+direct proof the distrust was warranted. Still 0/2 pass, but for a
+NEW, narrower reason: the attempt that finally reaches for position
+also overcorrects into near-black and gets guardrail-rejected before
+reaching the judge in both cases — the new lever gets used but never
+actually scored. This is now a distinct, scoped-down problem
+(overcorrection on the attempt that diversifies), not the original
+"stuck on 1-2 levers forever" problem, which this change resolved.

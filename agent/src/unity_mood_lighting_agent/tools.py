@@ -25,8 +25,10 @@ from unity_mood_lighting_agent.unity_bridge import (
     delete_object as _delete_object,
     get_light_properties,
     get_scene_bounds,
+    list_available_skyboxes,
     list_scene_transforms,
 )
+from unity_mood_lighting_agent.unity_bridge import set_skybox as _set_skybox
 from unity_mood_lighting_agent.unity_bridge import set_color_adjustments as _set_color_adjustments
 from unity_mood_lighting_agent.unity_bridge import set_ambient as _set_ambient
 from unity_mood_lighting_agent.unity_bridge import set_fog as _set_fog
@@ -474,6 +476,35 @@ def set_ambient(intensity: float) -> str:
         return f"Rejected: intensity {intensity} is negative."
     _set_ambient(intensity=intensity)
     return f"Updated ambient intensity to {intensity}."
+
+
+@function_tool
+def list_skyboxes() -> str:
+    """List every available HDRI skybox (by id) with its mood-relevant
+    metadata (environment indoor/outdoor, time_of_day, weather,
+    light_type, contrast, sky_view). Call this BEFORE set_skybox to pick
+    the right id — don't guess an id. An indoor scene with no visible
+    sky through a window may see little VISIBLE change from a skybox
+    swap, but ambient light color/intensity still updates since this
+    scene's ambient mode is Skybox-driven."""
+    options = list_available_skyboxes()
+    lines = [
+        f"- {o.id}: {o.display_name} ({o.environment}, {o.time_of_day}, {o.weather}, "
+        f"light={o.light_type}, contrast={o.contrast}, sky_view={o.sky_view}) — {o.description}"
+        for o in options
+    ]
+    return "\n".join(lines)
+
+
+@function_tool
+def set_skybox(skybox_id: str, exposure: float = 1.0, rotation: float = 0.0) -> str:
+    """Swap the scene's skybox to one of list_skyboxes()'s ids. exposure
+    (default 1.0) scales overall sky brightness — lower for a darker,
+    more oppressive mood; rotation (0-360 degrees) spins the HDRI,
+    useful for moving a bright spot out of a bad position. This changes
+    indoor ambient light color/intensity too (this scene's ambient mode
+    is Skybox-driven), not just a visible backdrop."""
+    return _set_skybox(skybox_id=skybox_id, exposure=exposure, rotation=rotation)
 
 
 @function_tool
