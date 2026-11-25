@@ -14,6 +14,13 @@ isolate this — reusing the full mood agent would leave genuine ambiguity
 about whether a bad result means "no spatial skill" or "the archetype/
 color/ambient instructions are drowning it out."
 
+2026-11-24, Eran's call: the agent SELF-SELECTS a random target object
+from the scene's own object list each run, instead of the harness
+assigning one. More dynamic coverage over repeated runs (exercises
+whatever furniture exists, not a fixed hand-picked list of 4), and it
+means the differentiation check (section below) also has to verify the
+agent isn't just picking the same "favorite" object every time.
+
 Every check here is deterministic (real pixels/real transforms, no LLM
 judge) EXCEPT the one place that's inherently language: whether the
 agent's stated REASONING actually matches the real geometry it produced.
@@ -24,6 +31,7 @@ holistic quality judge like judge.py's MoodJudgement.
 import asyncio
 import json
 import math
+from enum import Enum
 from pathlib import Path
 
 from agents import Agent, Runner
@@ -45,20 +53,26 @@ from unity_mood_lighting_agent.unity_bridge import (
 load_dotenv()
 
 SCENE_PATH = "Assets/room/Cosmic_Retro_MessHall_Props_FREE/Demo_Scene/Cosmic_Retro_Mesa_Props_Free.unity"
-
-# 4 target objects spanning different real positions in the room — chosen
-# so the cross-case differentiation check (section 4 below) actually means
-# something: a lazy "same spot every time" strategy must fail against at
-# least some of these.
-TARGET_OBJECTS = [
-    "Cosmic_retro_mesa_arcade_machine_games",  # corner, near a wall
-    "Cosmic_retro_mesa_table_small_square",  # central to the room
-    "Cosmic_retro_mesa_bed_simple",  # opposite wall from the arcade machine
-    "Cosmic_retro_mesa_vendor_snack",  # a third, distinct wall
-]
+N_RUNS = 4  # how many self-selecting trials to run per invocation
 
 MAX_REASONABLE_DISTANCE_FRACTION = 0.5  # of scene diagonal — catches "picked a spot nowhere near the target"
 MIN_REASONABLE_DISTANCE = 0.3  # world units — catches "clipped inside the target's own geometry"
+
+
+class SpatialOutcome(str, Enum):
+    """Deterministic, code-branchable instead of parsing free text —
+    same enum-over-prose preference used everywhere else in this
+    project (agent.py's ContrastLevel/StrategyArchetype). SUCCESS: both
+    position and aim were applied. MOVED_BUT_NOT_AIMED: position changed
+    but aim_light_at was never called or was rejected. GAVE_UP_NO_CHANGE:
+    every candidate it tried got rejected and it left the light exactly
+    where it started — this is the failure mode found live in the
+    vendor_snack case, where the agent's own reasoning text claimed an
+    action that never actually happened."""
+
+    SUCCESS = "success"
+    MOVED_BUT_NOT_AIMED = "moved_but_not_aimed"
+    GAVE_UP_NO_CHANGE = "gave_up_no_change"
 
 
 class SpatialDecision(BaseModel):
@@ -71,24 +85,39 @@ class SpatialDecision(BaseModel):
         "reference the real target object's position/size and the room's bounds, concretely."
     )
     light_used: str = Field(description="instance_id of the light you moved/aimed.")
-    target_object: str = Field(description="instance_id of the object you aimed the light at.")
+    target_object: str = Field(
+        description="instance_id (or exact name) of the object you RANDOMLY picked from the scene's object list to aim at."
+    )
+    outcome: SpatialOutcome = Field(
+        description="SUCCESS if you positioned AND aimed the light at your chosen target. "
+        "MOVED_BUT_NOT_AIMED if you repositioned it but couldn't get aim_light_at to confirm "
+        "it hits the target. GAVE_UP_NO_CHANGE if every candidate position/rotation you tried "
+        "was rejected and you left the light at its original position — be honest here, this "
+        "is a legitimate reportable outcome, not a failure to hide."
+    )
 
 
 spatial_agent = Agent(
     name="SpatialPlacementAgent",
     instructions=(
         "You are given a Unity scene's real bounding box, every object's "
-        "name/instance_id/position, and a camera screenshot. Your ONLY "
-        "job: pick one of the scene's EXISTING lights, reposition it "
-        "(set_object_transform) and aim it (aim_light_at) at the stated "
-        "target object, so it would create a dramatic rim/key light on "
-        "that object — a real light source near the object with a "
-        "plausible angle, not clipped inside the object's own geometry "
-        "and not left wherever it originally sat. Use the real "
-        "coordinates you were given to reason about distance and "
-        "direction, don't guess. This task is ONLY about light "
-        "position/rotation — do not touch intensity, color, or any "
-        "post-processing."
+        "name/instance_id/position, and a camera screenshot. Your job: "
+        "RANDOMLY pick ONE object from the scene's object list (not a "
+        "light) as your target — don't always default to the same "
+        "'obvious' one, genuinely vary your choice. Then pick one of the "
+        "scene's EXISTING lights, reposition it (set_object_transform) "
+        "and aim it (aim_light_at) at your chosen target, so it would "
+        "create a dramatic rim/key light on that object — a real light "
+        "source near the object with a plausible angle, not clipped "
+        "inside the object's own geometry and not left wherever it "
+        "originally sat. Use the real coordinates you were given to "
+        "reason about distance and direction, don't guess. If a "
+        "candidate position/rotation is rejected, adjust and retry "
+        "rather than giving up after one attempt — but if you genuinely "
+        "exhaust reasonable options, report outcome=gave_up_no_change "
+        "honestly rather than claiming an action that didn't happen. "
+        "This task is ONLY about light position/rotation — do not touch "
+        "intensity, color, or any post-processing."
     ),
     model="gpt-5.4-mini",
     output_type=SpatialDecision,
@@ -147,7 +176,7 @@ def _dist(a: tuple[float, float, float], b: tuple[float, float, float]) -> float
     return math.sqrt(sum((a[i] - b[i]) ** 2 for i in range(3)))
 
 
-async def run_case(target_name: str) -> dict:
+async def run_case(run_index: int) -> dict:
     open_scene(SCENE_PATH)
     restore_scene_baseline(SCENE_PATH)
     ensure_scene_ready(SCENE_PATH)
@@ -161,7 +190,7 @@ async def run_case(target_name: str) -> dict:
         {
             "role": "user",
             "content": [
-                {"type": "input_text", "text": f"{scene_context}\n\nTarget object: {target_name}. Position and aim a light on it."},
+                {"type": "input_text", "text": f"{scene_context}\n\nPick a random object from the list above as your target, then position and aim a light on it."},
                 {"type": "input_image", "image_url": image_url},
             ],
         }
@@ -170,7 +199,7 @@ async def run_case(target_name: str) -> dict:
     decision: SpatialDecision = result.final_output
 
     after = list_scene_transforms()
-    target_obj = next((o for o in after if o.name == target_name or o.instance_id == target_name), None)
+    target_obj = next((o for o in after if o.name == decision.target_object or o.instance_id == decision.target_object), None)
     moved_light = None
     for o in after:
         if not o.is_light:
@@ -187,8 +216,10 @@ async def run_case(target_name: str) -> dict:
     bounds = get_scene_bounds()
 
     case_result = {
-        "target": target_name,
+        "run_index": run_index,
+        "target": decision.target_object,
         "reasoning": decision.reasoning,
+        "stated_outcome": decision.outcome.value,
         "moved_a_light": moved_light is not None,
     }
 
@@ -219,6 +250,7 @@ async def run_case(target_name: str) -> dict:
 
     case_result.update(
         {
+            "target_resolved_name": target_obj.name,
             "light_position": light_pos,
             "light_rotation": (moved_light.rot_x, moved_light.rot_y, moved_light.rot_z),
             "target_position": target_pos,
@@ -228,6 +260,14 @@ async def run_case(target_name: str) -> dict:
             "raycast_hit_name": raycast.hit_name,
             "distance_sane": distance_sane,
             "deterministic_pass": in_bounds and aims_at_target and distance_sane,
+            # Catches the agent claiming SUCCESS/MOVED_BUT_NOT_AIMED while the
+            # real geometry disagrees — a second, structural honesty check
+            # on top of the free-text reasoning consistency check below.
+            "stated_outcome_matches_reality": (
+                (decision.outcome == SpatialOutcome.SUCCESS and aims_at_target)
+                or (decision.outcome == SpatialOutcome.MOVED_BUT_NOT_AIMED and moved_light is not None and not aims_at_target)
+                or (decision.outcome == SpatialOutcome.GAVE_UP_NO_CHANGE and not case_result["moved_a_light"])
+            ),
         }
     )
     return case_result
@@ -250,9 +290,9 @@ async def check_consistency(case_result: dict) -> dict:
 
 async def main():
     results = []
-    for target in TARGET_OBJECTS:
-        print(f"\n=== Spatial case: {target} ===")
-        case = await run_case(target)
+    for i in range(N_RUNS):
+        print(f"\n=== Spatial case {i + 1}/{N_RUNS} (self-selected target) ===")
+        case = await run_case(i)
         print(json.dumps(case, indent=2, default=str))
         consistency = await check_consistency(case)
         case["reasoning_consistent"] = consistency["consistent"]
@@ -260,9 +300,10 @@ async def main():
         print(f"[consistency] {consistency}")
         results.append(case)
 
-    # Cross-case differentiation: are the chosen positions actually
-    # different, or the same lazy spot regardless of target? The exact
-    # failure mode this test exists to catch (see mood-test-results.md).
+    # Cross-case differentiation: are the chosen POSITIONS and the chosen
+    # TARGETS actually different across runs, or the same lazy spot/object
+    # regardless of what's available? The exact failure mode this test
+    # exists to catch (see mood-test-results.md).
     positions = [r["light_position"] for r in results if "light_position" in r]
     pairwise_distances = [
         _dist(positions[i], positions[j])
@@ -270,21 +311,30 @@ async def main():
         for j in range(i + 1, len(positions))
     ]
     min_pairwise = min(pairwise_distances) if pairwise_distances else 0.0
+    distinct_targets = len({r.get("target_resolved_name") for r in results if "target_resolved_name" in r})
 
     n_pass = sum(1 for r in results if r.get("deterministic_pass"))
     n_consistent = sum(1 for r in results if r.get("reasoning_consistent"))
+    n_honest = sum(1 for r in results if r.get("stated_outcome_matches_reality"))
     print("\n=== Spatial eval summary ===")
     for r in results:
         status = "PASS" if r.get("deterministic_pass") else "FAIL"
-        print(f"{r['target']:45s} {status}  dist={r.get('distance_to_target')}  consistent={r.get('reasoning_consistent')}")
+        print(
+            f"{r.get('target', '?'):45s} {status}  dist={r.get('distance_to_target')}  "
+            f"consistent={r.get('reasoning_consistent')}  stated_outcome={r.get('stated_outcome')}  "
+            f"honest={r.get('stated_outcome_matches_reality')}"
+        )
     print(f"\nDeterministic placement: {n_pass}/{len(results)} passed")
     print(f"Reasoning consistency:   {n_consistent}/{len(results)} consistent")
+    print(f"Stated-outcome honesty:  {n_honest}/{len(results)} matched reality")
+    print(f"Distinct targets picked across {len(results)} runs: {distinct_targets} "
+          f"({'genuinely varying its choice' if distinct_targets > 1 else 'WARNING: always picked the same object'})")
     print(f"Min pairwise distance across all chosen positions: {min_pairwise:.2f} "
           f"({'DIFFERENTIATED — not a repeated lazy spot' if min_pairwise > 0.5 else 'WARNING: positions suspiciously similar across different targets'})")
 
     log_path = Path(__file__).resolve().parents[3] / "spatial_eval_log.jsonl"
     with open(log_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps({"results": results, "min_pairwise_distance": min_pairwise}, default=str) + "\n")
+        f.write(json.dumps({"results": results, "min_pairwise_distance": min_pairwise, "distinct_targets": distinct_targets}, default=str) + "\n")
 
 
 if __name__ == "__main__":

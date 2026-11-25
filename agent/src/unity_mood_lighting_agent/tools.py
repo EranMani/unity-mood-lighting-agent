@@ -94,12 +94,29 @@ def _apply_transform_with_guardrail(
     target: str,
     position: tuple[float, float, float] | None,
     rotation: tuple[float, float, float] | None,
+    required_hit_name: str | None = None,
 ) -> str:
     """Shared apply+guardrail path for set_object_transform and
     aim_light_at — one write path, so the raycast guardrail (build log #13)
     always runs no matter which tool is calling it, instead of being
     re-implemented per tool and risking one copy missing it (exactly the
-    bug create_light had before this refactor)."""
+    bug create_light had before this refactor).
+
+    required_hit_name (2026-11-24, Eran's call): when the CALLER actually
+    knows what it's trying to hit (aim_light_at always does — it has an
+    explicit aim_at_target), the guardrail should check for THAT object
+    specifically, not merely "hits something, not empty space." Found live
+    via the spatial eval: the old "hits anything" check happily approved a
+    light aimed at the wrong object entirely (hit the bed instead of the
+    requested arcade machine) because it never compared the hit against
+    the actual intended target. When required_hit_name is given, hitting
+    the WRONG object is now treated exactly the same as hitting nothing —
+    both are a rejection. Plain set_object_transform calls with no implied
+    target (just a free rotation, no specific aim-at intent) have nothing
+    to compare against, so they keep the old "hits something" check by
+    passing None here — there's no stricter check possible without a
+    stated target.
+    """
     current = _resolve_target(list_scene_transforms(), target)
     if current is None:
         return f"Error: no object with instance_id or name '{target}' found in the scene."
@@ -114,7 +131,17 @@ def _apply_transform_with_guardrail(
             return bounds_error
 
     check = check_rotation_aims_at_geometry(position_for_check, rotation_for_check, self_id=target)
-    if not check.hit:
+    if required_hit_name is not None:
+        ok = check.hit and check.hit_name == required_hit_name
+    else:
+        ok = check.hit
+    if not ok:
+        if required_hit_name is not None and check.hit:
+            return (
+                f"Rejected: {target} at position={position_for_check} with rotation={rotation_for_check} "
+                f"hits '{check.hit_name}', not the intended target '{required_hit_name}'. Recompute the "
+                "rotation/position so it actually points at the real target, not just at something."
+            )
         return (
             f"Rejected: {target} at position={position_for_check} with rotation={rotation_for_check} "
             "would point at nothing in the scene (no geometry within range). If you just changed "
@@ -317,7 +344,7 @@ def aim_light_at(light_target: str, aim_at_target: str) -> str:
         light_position=(light.pos_x, light.pos_y, light.pos_z),
         target_position=(aim_at.pos_x, aim_at.pos_y, aim_at.pos_z),
     )
-    return _apply_transform_with_guardrail(light.instance_id, position=None, rotation=rotation)
+    return _apply_transform_with_guardrail(light.instance_id, position=None, rotation=rotation, required_hit_name=aim_at.name)
 
 
 @function_tool
