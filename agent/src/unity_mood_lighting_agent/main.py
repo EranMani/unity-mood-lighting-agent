@@ -577,9 +577,11 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                         {"mean_brightness": visibility.mean_brightness, "pct_near_black": visibility.pct_near_black},
                         case_name, run_started_at,
                     )
-                    result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))
-                    shutil.copyfile(result_shot.path, latest_dir / "result.png")
-                    print(f"[screenshot] result saved: {result_shot.path} (+ latest/)")
+                    # Save the EXACT frame the guardrail just scored (not a
+                    # fresh re-capture — 2026-11-25 fix, see judge.py docstring).
+                    shutil.copyfile(post_attempt_capture.path, shot_dir / "result.png")
+                    shutil.copyfile(post_attempt_capture.path, latest_dir / "result.png")
+                    print(f"[screenshot] result saved: {post_attempt_capture.path} (+ latest/)")
                     return (
                         f"Gave up after {MAX_ATTEMPTS} attempts. Final attempt was rejected by "
                         f"the visibility guardrail (frame unreadable: "
@@ -633,9 +635,9 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                             {"p10": contrast.p10, "p90": contrast.p90, "spread": contrast.spread},
                             case_name, run_started_at,
                         )
-                        result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))
-                        shutil.copyfile(result_shot.path, latest_dir / "result.png")
-                        print(f"[screenshot] result saved: {result_shot.path} (+ latest/)")
+                        shutil.copyfile(post_attempt_capture.path, shot_dir / "result.png")
+                        shutil.copyfile(post_attempt_capture.path, latest_dir / "result.png")
+                        print(f"[screenshot] result saved: {post_attempt_capture.path} (+ latest/)")
                         return (
                             f"Gave up after {MAX_ATTEMPTS} attempts. Final attempt was rejected by "
                             f"the contrast guardrail (too flat for a high-contrast mood: spread="
@@ -643,7 +645,7 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                         )
                     continue  # skip the judge entirely, retry without burning that call
 
-            passed, judgement = await judge_mood_match(task)
+            passed, judgement = await judge_mood_match(task, image_path=post_attempt_capture.path)
             feedback = ""  # guardrail message (if any) consumed by this attempt, clear it
 
             print(
@@ -656,9 +658,9 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
 
             if passed:
                 _log_result(task, attempt, True, judgement, case_name, run_started_at)
-                result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))
-                shutil.copyfile(result_shot.path, latest_dir / "result.png")
-                print(f"[screenshot] result saved: {result_shot.path} (+ latest/)")
+                shutil.copyfile(post_attempt_capture.path, shot_dir / "result.png")
+                shutil.copyfile(post_attempt_capture.path, latest_dir / "result.png")
+                print(f"[screenshot] result saved: {post_attempt_capture.path} (+ latest/)")
                 return f"Success on attempt {attempt}: {judgement.reasoning}"
 
             attempt_history.append(
@@ -671,9 +673,9 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
             )
             if attempt == MAX_ATTEMPTS:
                 _log_result(task, attempt, False, judgement, case_name, run_started_at)
-                result_shot = capture_game_view(output_path=str(shot_dir / "result.png"))
-                shutil.copyfile(result_shot.path, latest_dir / "result.png")
-                print(f"[screenshot] result saved: {result_shot.path} (+ latest/)")
+                shutil.copyfile(post_attempt_capture.path, shot_dir / "result.png")
+                shutil.copyfile(post_attempt_capture.path, latest_dir / "result.png")
+                print(f"[screenshot] result saved: {post_attempt_capture.path} (+ latest/)")
                 return f"Gave up after {MAX_ATTEMPTS} attempts. Last judge score={judgement.mood_match_score}: {judgement.reasoning}"
 
     raise AssertionError("unreachable: loop always returns on its last iteration")

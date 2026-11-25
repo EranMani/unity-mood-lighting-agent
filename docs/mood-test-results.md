@@ -1466,3 +1466,90 @@ more iterations.
   screenshot and asking "wait, is the baseline itself black?" rather
   than continuing to tune guardrails/instructions against a broken
   starting point.
+
+## Session continued (2026-11-25): result.png never matched what got judged
+
+Right after the fixes above shipped, Eran looked at the latest horror
+`result.png` and called out that it was pure black — contradicting the
+"4/10, underexposed not crushed" summary just given. Investigation
+found a real, separate bug, not a regression of the fixes above.
+
+### The bug: 4 independent `capture_game_view()` calls per attempt
+
+1. `post_attempt_capture` in `main.py`, fed to the visibility and
+   contrast guardrails.
+2. A second, fully independent capture taken *inside*
+   `judge_mood_match()` in `judge.py` — this is the only image the LLM
+   judge ever actually sees.
+3. A third capture, taken fresh in `main.py` *after* the judge call
+   returned (on the passed path, the judge-failed path, and both the
+   visibility- and contrast-guardrail-rejection paths), purely to save
+   as `result.png` for the record.
+
+Nothing enforced agreement between these three. The judge's own score
+and reasoning were accurate for capture #2 — just not for capture #3,
+the only one ever written to disk. `result.png` had never been seen by
+anything that decided pass/fail; it was a decorative screenshot taken
+after the decision was already made.
+
+Confirmed concretely on the `20261125T200516Z` horror run: the logged
+judge score was 4/10 ("extremely dark... more like the scene was
+dimmed than deliberately lit"), but running `check_frame_visibility()`
+directly against the saved `result.png` gave `mean_brightness=19.6`,
+`pct_near_black=65.7%` — visibility check still said `visible=True`
+(see next section), but visually the frame is close to pure black, a
+real mismatch from what the judge scored.
+
+### Investigated, but deliberately did NOT change: the visibility floor
+
+Before assuming `check_frame_visibility()`'s 90%-near-black ceiling
+was simply too loose, pulled a real PRE-fix PASSING horror screenshot
+(`20261124T085853Z`, judge score 7) and ran the same check on it:
+`mean_brightness=14.1`, `pct_near_black=67.2%` — nearly identical
+numbers to the broken frame (65.7%/19.6), yet a vision check confirmed
+this one is a legitimate, atmospheric dark room with visible shadow
+shaping, not a crushed-black failure. The pixel-level stat genuinely
+cannot distinguish "crushed black" from "legit dark mood" at this
+resolution — tightening the ceiling would have false-rejected good
+dark scenes using the one data point that happened to be bad. Left the
+threshold exactly as-is; this is a known limitation of a cheap,
+free pixel check, not something to patch reactively from a single
+bad sample.
+
+### Fix shipped
+
+- `judge.py`: `judge_mood_match(mood_task, image_path=None)` now scores
+  whatever `image_path` it's given, instead of taking its own
+  independent capture. `image_path=None` still falls back to a fresh
+  capture, kept only for standalone/ad-hoc use outside the main loop.
+- `main.py`: the single judge call in the attempt loop now passes
+  `image_path=post_attempt_capture.path` — the exact frame the
+  visibility/contrast guardrails already checked. Every result-saving
+  path (`passed`, judge-failed-at-max-attempts, visibility-rejected-at-
+  max-attempts, contrast-rejected-at-max-attempts) now copies that same
+  file to `result.png` via `shutil.copyfile` instead of calling
+  `capture_game_view()` again.
+- Left the two PRE-render guardrail rejections (grading-severity,
+  no-transform-change) capturing fresh — correct, not an oversight:
+  those reject before anything has even been rendered, so there is no
+  prior capture to reuse yet.
+
+### Verified live
+
+Re-ran horror end to end post-fix. Judge passed on attempt 1, score
+6/10: *"very dark overall... cold blue tint... uniform dim wash rather
+than a strongly directional horror setup... reads more like 'lights
+turned down' than aggressively tense."* Pulled the saved `result.png`
+and vision-checked it directly against that exact reasoning — matched
+word for word (dark room, cold blue wall-light/monitor tint, no
+dramatic key light, no real shadow shaping). Capture mismatch confirmed
+fixed: the file on disk is now provably the file that got judged.
+
+### Known fallout, not retroactively fixed
+
+This capture-mismatch bug existed from when the screenshot pipeline was
+first built (2026-11-23) through this session's earlier fixes, so any
+historical `result.png` — including past logged "passing" runs — may
+not reflect what its judge call actually scored. Not re-validating old
+runs; just don't treat an old saved screenshot as ground truth for a
+historical score without independently re-checking it.

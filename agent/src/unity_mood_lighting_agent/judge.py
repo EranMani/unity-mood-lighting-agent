@@ -84,12 +84,24 @@ def _image_to_data_url(path: str) -> str:
     return image_to_data_url(path)
 
 
-async def judge_mood_match(mood_task: str) -> tuple[bool, MoodJudgement]:
-    """Captures the CURRENT live Game view and scores it against mood_task.
-    Returns (passed, judgement) — passed is plain code deciding from
-    mood_match_score, not the agent's own opinion of pass/fail."""
-    capture = capture_game_view()
-    image_url = _image_to_data_url(capture.path)
+async def judge_mood_match(mood_task: str, image_path: str | None = None) -> tuple[bool, MoodJudgement]:
+    """Scores image_path against mood_task. Returns (passed, judgement) —
+    passed is plain code deciding from mood_match_score, not the agent's
+    own opinion of pass/fail.
+
+    image_path should be the SAME capture the pre-judge guardrails
+    (visibility/contrast) already scored — pass it in explicitly rather
+    than taking a fresh capture_game_view() here. Found live (2026-11-25,
+    Eran caught it from a saved result.png): the old behavior took its own
+    independent capture, and main.py's final saved result.png was a FOURTH
+    separate capture taken even later, after the judge call — three
+    different screenshots of the same attempt could legitimately disagree,
+    so a judged "4/10, underexposed" attempt could still save a crushed-
+    black result.png that nothing ever actually scored. image_path=None
+    falls back to a fresh capture only for standalone/ad-hoc use outside
+    the main attempt loop."""
+    capture_path = image_path if image_path is not None else capture_game_view().path
+    image_url = _image_to_data_url(capture_path)
 
     input_message = [
         {
