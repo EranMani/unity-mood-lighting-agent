@@ -41,6 +41,7 @@ from unity_mood_lighting_agent.tools import (
 from unity_mood_lighting_agent.unity_bridge import (
     get_active_scene,
     get_ambient,
+    get_baseline_brightness,
     get_color_adjustments,
     get_fog,
     get_light_properties,
@@ -152,7 +153,12 @@ agent = Agent(
         "too (it's a uniform fill applied everywhere regardless of any "
         "light's range, and sits at a flattening 1.0 by default — a dark "
         "zone cannot read as genuinely dark while it's high, no matter "
-        "what any individual light does). Two deterministic checks run "
+        "what any individual light does). Calibrate your key light's "
+        "actual intensity against the scene's baseline render brightness "
+        "(reported separately below) — a number like '2.0' means nothing "
+        "on its own, what matters is whether your attempt's own rendered "
+        "p90 ends up clearly above the baseline's p90, not just higher "
+        "than your other lights' values. Two deterministic checks run "
         "on every attempt purely to catch EXTREME failures on either "
         "side — a frame gone fully black/unreadable, or (only for "
         "high-contrast moods) a frame so flat it has no real brightness "
@@ -275,4 +281,17 @@ def get_scene_context() -> str:
         else ""  # no cache yet for this scene — main.py's run() ensures one exists before any attempt
     )
 
-    return f"{transforms_section}\n\n{bounds_section}\n\n{post_processing_section}\n\n{spatial_section}"
+    baseline_brightness = get_baseline_brightness()
+    brightness_section = (
+        f"Scene's baseline render brightness (measured once, untouched scene, before any mood edits): "
+        f"mean={baseline_brightness.mean_brightness}/255, p90={baseline_brightness.p90}/255. "
+        "Use this as your calibration anchor for 'how bright is bright' in THIS scene's own units — "
+        "for a genuinely dominant dramatic key light, the ATTEMPT's own rendered p90 should end up "
+        "clearly, measurably above this baseline p90, not just relatively brighter than your other "
+        "lights. An intensity number alone means nothing without this reference; this works even on "
+        "a scene with no existing lights, where baseline would simply measure near-black."
+        if baseline_brightness is not None
+        else ""
+    )
+
+    return f"{transforms_section}\n\n{bounds_section}\n\n{post_processing_section}\n\n{spatial_section}\n\n{brightness_section}"

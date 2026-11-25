@@ -1,38 +1,38 @@
 {
   "lights": [
     {
-      "instance_id": "568105584918843242",
+      "instance_id": "568105584918844132",
       "name": "Point Light (4)",
       "mode": "Realtime",
       "type": "Point",
-      "intensity": 2.17,
-      "color_r": 1,
-      "color_g": 1,
-      "color_b": 1,
-      "range": 4.13,
+      "intensity": 0.02,
+      "color_r": 0.3,
+      "color_g": 0.5,
+      "color_b": 0.9,
+      "range": 0.8,
       "shadow_type_int": 2,
       "pos_x": 4.67929554,
       "pos_y": 0.543907642,
       "pos_z": -2.62548161,
-      "rot_x": 47.45701,
+      "rot_x": 47.457016,
       "rot_y": 220.970474,
       "rot_z": 345.058075
     },
     {
-      "instance_id": "568105584918843262",
+      "instance_id": "568105584918844152",
       "name": "Point Light (3)",
       "mode": "Realtime",
       "type": "Point",
-      "intensity": 0.81,
-      "color_r": 0.619607866,
-      "color_g": 0.9960785,
-      "color_b": 0.9960785,
-      "range": 1.77,
-      "shadow_type_int": 2,
+      "intensity": 0.001,
+      "color_r": 0.35,
+      "color_g": 0.55,
+      "color_b": 0.9,
+      "range": 0.6,
+      "shadow_type_int": 1,
       "pos_x": 5.19629574,
       "pos_y": -0.115092278,
       "pos_z": -4.67448139,
-      "rot_x": 47.45701,
+      "rot_x": 47.457016,
       "rot_y": 220.970474,
       "rot_z": 345.058075
     }
@@ -43,29 +43,33 @@
   "baked_gi": false,
   "scene_path": "Assets/room/Cosmic_Retro_MessHall_Props_FREE/Demo_Scene/Cosmic_Retro_Mesa_Props_Free.unity",
   "color_adjustments": {
-    "post_exposure": 0.39,
-    "contrast": 17.6,
-    "saturation": 7.8,
-    "color_filter_r": 1.0,
-    "color_filter_g": 1.0,
+    "post_exposure": -0.15,
+    "contrast": 32.0,
+    "saturation": -12.0,
+    "color_filter_r": 0.76,
+    "color_filter_g": 0.86,
     "color_filter_b": 1.0
   },
   "vignette": {
-    "exists": false,
-    "intensity": 0.0,
-    "smoothness": 0.0
+    "exists": true,
+    "intensity": 0.38,
+    "smoothness": 0.55
   },
   "fog": {
     "enabled": true,
-    "color_r": 0.185653239,
-    "color_g": 0.213942066,
-    "color_b": 0.264150918,
+    "color_r": 0.08,
+    "color_g": 0.12,
+    "color_b": 0.18,
     "mode": "Linear",
-    "density": 0.06,
-    "start_distance": 17.68,
-    "end_distance": 86.31
+    "density": 0.075,
+    "start_distance": 8.5,
+    "end_distance": 14.5
   },
   "ambient": {
-    "intensity": 1.0
+    "intensity": 0.0
+  },
+  "baseline_brightness": {
+    "mean_brightness": 13.3,
+    "p90": 25.0
   }
 }

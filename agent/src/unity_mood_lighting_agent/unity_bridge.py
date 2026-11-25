@@ -386,6 +386,58 @@ def check_frame_visibility(image_path: str) -> FrameVisibility:
     )
 
 
+def _frame_percentiles(image_path: str, percentiles: tuple[int, ...]) -> list[int]:
+    """Shared pixel-histogram percentile helper — pure PIL, no numpy
+    (this project's venv doesn't have it), used by both check_frame_
+    contrast and measure_frame_brightness so the two deterministic
+    checks (and the baseline-brightness calibration reference) all
+    compute luminance the exact same way."""
+    from PIL import Image
+
+    img = Image.open(image_path).convert("L")
+    histogram = img.histogram()  # 256 buckets, index = luminance value
+    total_pixels = img.width * img.height
+
+    def _percentile(pct: float) -> int:
+        target = total_pixels * pct / 100
+        cumulative = 0
+        for luminance, count in enumerate(histogram):
+            cumulative += count
+            if cumulative >= target:
+                return luminance
+        return 255
+
+    return [_percentile(p) for p in percentiles]
+
+
+class FrameBrightness(BaseModel):
+    """A scene's render brightness, measured in real pixel terms — used
+    as the lighting agent's calibration anchor for 'how bright is
+    bright' (2026-11-25, Eran's call): hardcoding an intensity number
+    doesn't generalize to a scene with zero existing lights, but a
+    MEASURED render brightness does, since it's computed fresh for
+    whatever scene is active, including an all-dark one."""
+
+    mean_brightness: float = Field(description="0-255, average luminance across the whole frame.")
+    p90: float = Field(description="90th percentile luminance, 0-255 — how bright the frame's brightest 10% already gets.")
+
+
+def measure_frame_brightness(image_path: str) -> FrameBrightness:
+    """Pure pixel-level measurement, no LLM — same percentile machinery
+    as check_frame_contrast, but a plain fact (what IS this render's
+    brightness), not a pass/fail guardrail judgment."""
+    from PIL import Image
+
+    img = Image.open(image_path).convert("L")
+    histogram = img.histogram()
+    total_pixels = img.width * img.height
+    weighted_sum = sum(luminance * count for luminance, count in enumerate(histogram))
+    mean_brightness = weighted_sum / total_pixels
+
+    p90 = _frame_percentiles(image_path, (90,))[0]
+    return FrameBrightness(mean_brightness=round(mean_brightness, 1), p90=float(p90))
+
+
 class FrameContrast(BaseModel):
     """Result of checking whether a captured frame has real brightness
     SPREAD across it (a genuinely bright zone and a genuinely dark zone),
@@ -410,23 +462,7 @@ def check_frame_contrast(image_path: str) -> FrameContrast:
     main.py gates this on mood_breakdown.target_contrast == 'high', a
     low-contrast mood (soft_ambient, etc.) is SUPPOSED to be flat and
     should never be rejected by this."""
-    from PIL import Image
-
-    img = Image.open(image_path).convert("L")
-    histogram = img.histogram()  # 256 buckets, index = luminance value
-    total_pixels = img.width * img.height
-
-    def _percentile(pct: float) -> int:
-        target = total_pixels * pct / 100
-        cumulative = 0
-        for luminance, count in enumerate(histogram):
-            cumulative += count
-            if cumulative >= target:
-                return luminance
-        return 255
-
-    p10 = _percentile(10)
-    p90 = _percentile(90)
+    p10, p90 = _frame_percentiles(image_path, (10, 90))
     spread = p90 - p10
     return FrameContrast(
         p10=float(p10),
@@ -1324,6 +1360,7 @@ def capture_scene_baseline(scene_path: str | None = None) -> dict:
     data["vignette"] = vignette.model_dump()
     data["fog"] = fog.model_dump()
     data["ambient"] = get_ambient().model_dump()
+    data["baseline_brightness"] = measure_frame_brightness(capture_game_view().path).model_dump()
 
     os.makedirs(_BASELINE_DIR, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -1407,6 +1444,25 @@ def ensure_scene_ready(scene_path: str | None = None) -> dict:
     report = json.loads(result.stdout)
     report["baseline"] = baseline
     return report
+
+
+def get_baseline_brightness(scene_path: str | None = None) -> FrameBrightness | None:
+    """Read the scene's captured baseline render brightness — the
+    lighting agent's calibration anchor for 'how bright is bright' in
+    THIS scene's own units, measured once at baseline-capture time (see
+    capture_scene_baseline). Returns None if no baseline exists yet, or
+    it predates this field (old cached data) — callers should treat
+    that as 'no anchor available' rather than guessing a fake one."""
+    if scene_path is None:
+        scene_path = get_active_scene().path
+    path = _baseline_path_for_scene(scene_path)
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if "baseline_brightness" not in data:
+        return None
+    return FrameBrightness(**data["baseline_brightness"])
 
 
 def restore_scene_baseline(scene_path: str | None = None) -> dict:

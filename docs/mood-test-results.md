@@ -1103,3 +1103,50 @@ intensity calibrated to a self-invented, too-timid order of magnitude,
 unrelated to WHERE the light sits). Keeping it (cheap, sound, no
 regression, real qualitative improvement) — intensity calibration is
 still the open item, to be tackled next, separately.
+
+## Brightness-anchor added, tested, same honest pattern (2026-11-24/25, continued)
+
+**Built the deterministic brightness anchor, per the spatial/lighting
+separation-of-concerns agreement**: Eran correctly flagged that having
+the spatial agent reason about light intensity would violate its own
+scope (geometry/placement only, not light values). Redesigned as pure
+deterministic code instead — `measure_frame_brightness()` (mean + p90
+luminance, no LLM, shares `_frame_percentiles()` with
+`check_frame_contrast`), captured ONCE at `capture_scene_baseline()`
+time and stored in the baseline JSON, read back via
+`get_baseline_brightness()`. Reported in `get_scene_context()` as a
+calibration anchor, and referenced explicitly in the archetype
+instructions: a dramatic key light's intensity should be judged by
+whether the ATTEMPT's own rendered p90 ends up measurably above the
+scene's baseline p90, not by an arbitrary invented number. Generalizes
+to a scene with zero existing lights (baseline would simply measure
+near-black, the instruction still makes sense).
+
+**Caught and fixed a contamination bug while testing**: manually
+recapturing the baseline (bypassing `main.py`'s normal
+`cleanup_agent_lights()` -> `capture_scene_baseline()` order) briefly
+captured 3 lights instead of 2 — a stray agent-created light from an
+earlier test run was still in the scene. Cleaned up and recaptured
+correctly before trusting the numbers (`baseline: mean=13.3, p90=25.0`
+for this scene).
+
+**Result on the same 2 struggling cases**: still 0/2, but with real,
+specific partial signal this time — `horror` attempt 2 pushed its own
+p90 to exactly 35, genuinely above the 25 baseline, the anchor concept
+visibly working as designed for the first time. Still 4 short of the
+35 contrast-spread floor. Attempt 3's judge complaint ("a nearly black,
+faceted polygon filling most of the frame") reads like a DIFFERENT
+problem than intensity at all — possibly camera framing/composition,
+not yet investigated. `thriller` showed no clear improvement and
+swung to the opposite failure mode (near-black) rather than converging.
+
+**Eran's response, verbatim, governs what comes next**: "i dont accept
+this as honest current state of the project. we are not done until the
+judge will pass every kind of mood in our eval suite... lets dig deeper
+and understand the gaps we have." Explicitly NOT treating today's mixed
+results as a stopping point — directed a deeper inspection of exactly
+where the lighting agent's retry loop is failing: is it position,
+configuration (intensity/color/etc.), or a failure to translate the
+judge's own feedback text into concrete technical parameter changes
+attempt-to-attempt? That inspection is the next session segment's
+starting point, not yet done.
