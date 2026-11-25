@@ -119,3 +119,63 @@ Editor's own "Light Explorer" window (Window > Rendering > Light
 Explorer) is a human-facing GUI built on exactly these same component
 queries — we don't drive that window, we query the same data directly
 via `script eval`, which is more reliable and scriptable.
+
+## World position vs. local position — a real bug this caused (2026-11-24)
+
+Every `Transform` carries TWO separate coordinate representations at
+once, not one:
+
+- **World position** (`transform.position`, `transform.eulerAngles`) —
+  measured from the scene's single shared origin (0,0,0), the same
+  anchor for every object regardless of where it sits in the hierarchy.
+  This is "where am I, period."
+- **Local position** (`transform.localPosition`,
+  `transform.localEulerAngles`) — measured relative to the object's own
+  PARENT, not the scene origin. This is "how far am I from my parent,"
+  meaningless on its own without knowing what the parent is doing.
+
+If an object has no parent, local and world are numerically identical
+(the "parent" is effectively the scene root itself) — this is why a
+local/world mix-up can sit completely invisible for a long time: it
+only produces a wrong result once an object actually HAS a parent with
+a non-identity position/rotation/scale.
+
+**The composition is not simple addition in general.** `world =
+parent.TransformPoint(local)`, which accounts for the parent's own
+rotation and scale, not just its position — think of a seat bolted
+inside a train car: the seat's position relative to the car (local)
+never changes, but where it actually sits in the real world depends on
+both where the car is AND which way the car is facing. It only
+collapses to plain vector addition when the parent's rotation is
+identity and scale is 1 (the specific case this project's bug happened
+to hit).
+
+**You never need to do that composition by hand.** `Transform` exposes
+both spaces as properties, and ASSIGNING to the world ones
+(`transform.position = worldVec`, `transform.eulerAngles = worldEuler`)
+makes Unity compute and store the correct underlying local values for
+whatever parent exists, automatically, in both directions (get and
+set). Same principle as this project's rotation guardrail already
+using `Quaternion.Euler` instead of reimplementing that trig in Python
+— never hand-roll math Unity already does correctly for you.
+
+**The actual bug, found live via a spatial-placement eval test**:
+`unity_bridge.set_object_transform()` originally called the Unity
+CLI's own `gameobject set_transform --position/--rotation`, which (per
+its own `--help` text) writes `localPosition`/`localEulerAngles`. Every
+OTHER read in this project (`list_scene_transforms`, `get_scene_bounds`)
+reports `transform.position`/`eulerAngles` — WORLD space. The two
+original scene lights had no parent all session, so this was invisible
+the entire time; the first real test of position-setting (the spatial
+eval, see docs/mood-test-results.md) exposed it immediately, after
+something in the long-running unsaved Editor session gave both lights
+a parent. Confirmed with a live repro: requested absolute position
+(1,2,3), the CLI applied it as local, the light actually landed at
+parent_world_position + (1,2,3) — nowhere near what was asked for.
+
+**Fix**: `set_object_transform()` no longer calls the CLI command at
+all for this. It writes its own `script eval` that assigns directly to
+`t.position`/`t.eulerAngles` (world-space setters), correct regardless
+of whatever parent an object has now or gains later — no manual
+composition, no dependency on the CLI's (undocumented-to-us) choice of
+local space.

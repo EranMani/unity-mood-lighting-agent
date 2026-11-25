@@ -988,3 +988,41 @@ own guardrail already has, no judge LLM needed at all), kept separate
 from the mood eval suite's pass/fail tally since it tests an entirely
 different capability and shouldn't blur two unrelated numbers together.
 Not yet implemented — next session's starting point.
+
+## Spatial eval found a foundational bug before any model-capability answer was valid (2026-11-24, continued)
+
+Built the isolated spatial test (`spatial_eval.py`, a dedicated minimal
+agent, no mood/archetype content, 4 target objects, fully deterministic
+geometric scoring). First run: 1/4 deterministic pass, 0/4 reasoning-
+consistent — looked like a capability failure, but the actual light
+positions were bizarre (e.g. requested near a table, landed 12+ units
+away in a totally different part of the room), while the model's own
+stated reasoning was consistently sensible. That mismatch pointed at
+the tool, not the model.
+
+Root cause, confirmed live: `set_object_transform()` called the Unity
+CLI's `gameobject set_transform --position/--rotation`, which writes
+LOCAL position/rotation (relative to the object's parent); every other
+read in this project (`list_scene_transforms`, `get_scene_bounds`)
+reports WORLD position (parent already baked in). Both original scene
+lights had no parent all session, so this was invisible until this
+test — the first real attempt at setting a position on an existing
+object — ran against a live Editor session where something (an
+unresolved secondary mystery, not file corruption since nothing is
+auto-saved) had since given both lights a parent. Full conceptual
+writeup (world vs. local, the Transform/parent composition, why it's
+not simple addition in general, the Unity built-in fix) is in
+`docs/unity-lighting-rendering-concepts.md`.
+
+**Fix**: `set_object_transform()` no longer uses the CLI command at
+all — writes its own `script eval` assigning directly to
+`t.position`/`t.eulerAngles` (Unity's world-space setters), correct
+regardless of any parent. Verified live: requested (1,2,3), got exactly
+(1,2,3) in world space.
+
+**Not yet done**: reload the scene fresh in the Editor (clear the
+unexplained accumulated parenting/drift from hours of unsaved live
+testing) and re-run the 4-case spatial eval on the fixed, clean
+pipeline — today's 1/4 result is not a trustworthy read on the model's
+actual spatial capability, it's mostly measuring this bug. That re-run
+is the real next step before drawing any conclusion.

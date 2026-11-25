@@ -221,23 +221,46 @@ def set_object_transform(
     rotation: tuple[float, float, float] | None = None,
 ) -> None:
     """Move/rotate a GameObject by its instance_id (from
-    list_scene_transforms()). Omit position or rotation to leave that
-    channel unchanged, matching the Unity CLI's own behavior."""
-    args = [
-        UNITY_EXE,
-        "command",
-        "gameobject set_transform",
-        "--target",
-        str(target),
-        "--project-path",
-        PROJECT_PATH,
-    ]
-    if position is not None:
-        args += ["--position", f"[{position[0]},{position[1]},{position[2]}]"]
-    if rotation is not None:
-        args += ["--rotation", f"[{rotation[0]},{rotation[1]},{rotation[2]}]"]
+    list_scene_transforms()) in WORLD space. Omit position or rotation to
+    leave that channel unchanged.
 
-    subprocess.run(args, capture_output=True, text=True, check=True)
+    Deliberately does NOT use the Unity CLI's own `gameobject
+    set_transform --position/--rotation` — confirmed live, 2026-11-24:
+    that CLI command writes `transform.localPosition`/`localEulerAngles`
+    (relative to the object's parent), while every read in this project
+    (list_scene_transforms, get_scene_bounds) reports `transform.position`/
+    `eulerAngles` (WORLD space, parent already baked in by Unity). Any
+    object with a non-identity parent silently landed somewhere
+    completely different from what was requested — found when a spatial-
+    placement test asked for an absolute position and got a wildly
+    different result. Fix: assign directly to `transform.position`/
+    `transform.eulerAngles` (Unity's own world-space setters) via script
+    eval instead — Unity computes the correct underlying localPosition
+    for whatever parent exists, no manual matrix composition needed on
+    our side, same principle as this file's rotation guardrail already
+    using Quaternion.Euler instead of reimplementing that math in
+    Python. See docs/unity-lighting-rendering-concepts.md for the full
+    world-vs-local writeup."""
+    assignments = []
+    if position is not None:
+        assignments.append(f"t.position = new UnityEngine.Vector3({position[0]}f, {position[1]}f, {position[2]}f);")
+    if rotation is not None:
+        assignments.append(f"t.eulerAngles = new UnityEngine.Vector3({rotation[0]}f, {rotation[1]}f, {rotation[2]}f);")
+    if not assignments:
+        return
+
+    script = (
+        "foreach (var t in UnityEngine.Object.FindObjectsByType<UnityEngine.Transform>(UnityEngine.FindObjectsSortMode.None)) { "
+        "if (t.gameObject.GetEntityId().ToString() == \"" + str(target) + "\") { "
+        + " ".join(assignments) + " break; } }\n"
+        "return new { ok = true };"
+    )
+    subprocess.run(
+        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
 
 
 class CaptureResult(BaseModel):
