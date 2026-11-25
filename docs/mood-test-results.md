@@ -1553,3 +1553,71 @@ historical `result.png` — including past logged "passing" runs — may
 not reflect what its judge call actually scored. Not re-validating old
 runs; just don't treat an old saved screenshot as ground truth for a
 historical score without independently re-checking it.
+
+## Session continued (2026-11-25): key/fill/rim lighting + a p90-vs-baseline guardrail
+
+Eran asked two direct questions after the capture-mismatch fix: does
+the agent actually follow key/fill/rim three-point lighting, and is it
+being too conservative on intensity? Checked both against real code
+and real data before building anything.
+
+**Key/fill/rim: confirmed NO.** `agent.py`'s instructions only knew
+one lighting concept — "a key light, suppress everything else near-
+zero." No fill light (controlled secondary that keeps the shadow side
+readable without flattening it) and no rim/backlight (edge separation
+from background) existed anywhere in the prompt.
+
+**"Too conservative on intensity": confirmed NO, wrong diagnosis.**
+Pulled the actual numbers from the just-verified 6/10 "passing" horror
+run: key light intensity was 14.5 (not timid), yet the frame's own
+measured bright zone (p90=44) came in BELOW the scene's untouched,
+unlit baseline (p90=112). Raising the intensity number further
+wouldn't have fixed this — something (global grading/vignette
+stacking back on top) was eating the light's actual contribution
+before it ever reached the frame. The real gap: the agent's own
+instructions already said the attempt's p90 should clear baseline
+p90, but nothing in code enforced it — `CONTRAST_SPREAD_FLOOR`/
+`P10_CEILING` check spread and dark-zone darkness, neither checks the
+bright zone against baseline. That exact "passing" run (spread=41,
+p10=3.0, has_real_contrast=True) sailed through untouched.
+
+**Fix 1 — three-point lighting in the agent's instructions
+(`agent.py`).** Replaced the old "one key, kill everything else"
+guidance with an explicit KEY + FILL (10-30% of key, never fully off)
++ RIM (optional, behind/to-the-side edge light) structure. Ambient
+(separate, uniform, scene-wide lever) still goes near-zero for drama —
+kept distinct from a directional fill light, which should NOT go to
+zero.
+
+**Fix 2 — a new deterministic guardrail (`main.py`,
+`KEY_LIGHT_P90_LIFT_FLOOR = 1.05`).** For high-contrast moods only,
+gated behind the existing contrast check (`has_real_contrast`) rather
+than replacing it: even when spread/p10 both pass, now also requires
+the attempt's rendered p90 to clear the scene's untouched baseline p90
+by 5%. Rejects before the judge call, same pattern as the existing
+guardrails, with feedback pointing at the specific fix (push key
+intensity, narrow range, or ease off a grading value quietly eating
+the gain).
+
+**Verified live, two ways:**
+- Ran the new guardrail's math directly against the earlier 6/10 "pass"
+  (p90=44, baseline p90=112, required=117.6) — confirms it would have
+  correctly caught that exact case.
+- Re-ran horror live (`MAX_ATTEMPTS_DIAGNOSTIC_OVERRIDE=5`). Attempt 1
+  explicitly built key+fill+rim in its own summary — the new
+  instructions are being followed, not just present in the prompt.
+  Attempt 3 was rejected live by the new guardrail: `p90=48.0 < required
+  117.6` — confirmed firing correctly in the real attempt loop, not
+  just in a standalone check.
+
+**Net result, reported honestly:** horror did NOT pass in either
+post-fix run (3-attempt run failed on the transform-mandate guardrail;
+5-attempt run failed on grading-severity after the new p90 guardrail
+correctly blocked attempt 3). This is not a regression — the earlier
+"pass" was a false positive the loophole let through. Closing it
+makes the eval stricter and more honest, but the underlying challenge
+(a genuinely dominant key light that survives grading without tripping
+severity) is still open. Lights are escalating hard across attempts
+(2.8 → 4.8 → 6.2 → 12.5 → 16.5 intensity) while still getting rejected
+by one guardrail or another — worth a dedicated tuning pass next
+session rather than more ad-hoc pushes.

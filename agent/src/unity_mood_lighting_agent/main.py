@@ -48,6 +48,7 @@ from unity_mood_lighting_agent.unity_bridge import (
     ensure_scene_ready,
     get_active_scene,
     get_ambient,
+    get_baseline_brightness,
     get_color_adjustments,
     get_fog,
     get_light_properties,
@@ -64,6 +65,22 @@ load_dotenv()
 MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS_DIAGNOSTIC_OVERRIDE", 3))  # permanent default stays 3; override is a one-off diagnostic knob, not a config to leave set
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LOG_PATH = REPO_ROOT / "mood_test_log.jsonl"
+
+# Minimum fraction the attempt's own rendered p90 must exceed the
+# scene's untouched baseline p90 by, for high-contrast moods only
+# (2026-11-25, Eran's call). Found live: a horror attempt scored 4/10
+# as "underexposed... reads like dimmed, not deliberately lit" while
+# STILL passing the existing CONTRAST_SPREAD_FLOOR/P10_CEILING check
+# (spread + dark-zone darkness were both fine) — measured its own p90
+# at 44 against baseline p90=112, i.e. the "dominant key light" never
+# actually got brighter than the room's own unlit ambient highlight.
+# Spread/p10 catch "too flat" and "not dark enough"; neither catches
+# "the supposedly dominant light never actually dominates," which is
+# a third, independent failure mode. 1.05 (5% over baseline) is
+# deliberately loose — this only needs to catch a key light that's
+# net LOWER than or barely at the unlit baseline, not referee exact
+# brightness taste.
+KEY_LIGHT_P90_LIFT_FLOOR = 1.05
 
 
 def _snapshot_lever_state() -> dict:
@@ -644,6 +661,57 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                             f"{contrast.spread}, needed {CONTRAST_SPREAD_FLOOR}+)."
                         )
                     continue  # skip the judge entirely, retry without burning that call
+
+                # Third deterministic guardrail, independent of the one
+                # above (2026-11-25, found live): has_real_contrast can
+                # be True — a real spread AND a genuinely dark zone —
+                # while the "dominant key light" still never got
+                # brighter than the room's own UNTOUCHED baseline. The
+                # case that caught this: p10=3.0, p90=44.0, spread=41.0
+                # (has_real_contrast=True, sailed through the check
+                # above) against baseline p90=112.0 — the bright zone
+                # was still dimmer than the unlit room, which is exactly
+                # the "underexposed/dimmed, not deliberately lit"
+                # complaint the judge gave it. Only runs when the check
+                # above already passed (has_real_contrast was True);
+                # if it failed, that guardrail already rejected/fed
+                # back and we never reach here.
+                baseline_brightness = get_baseline_brightness()
+                if baseline_brightness is not None:
+                    required_p90 = baseline_brightness.p90 * KEY_LIGHT_P90_LIFT_FLOOR
+                    if contrast.p90 < required_p90:
+                        print(
+                            f"[guardrail] attempt {attempt}/{MAX_ATTEMPTS} key light never exceeded "
+                            f"baseline brightness (p90={contrast.p90} < required {required_p90:.1f}, "
+                            f"baseline_p90={baseline_brightness.p90}) — skipping judge call"
+                        )
+                        feedback = (
+                            f"Your last change has real spread/darkness (p10={contrast.p10}, "
+                            f"spread={contrast.spread}), but its BRIGHT zone (p90={contrast.p90}/255) "
+                            f"never actually got brighter than this scene's own UNTOUCHED baseline "
+                            f"(p90={baseline_brightness.p90}/255, {required_p90:.1f} required). A key light "
+                            "that's supposedly 'dominant' but dimmer than the room's own unlit highlight "
+                            "reads as 'the scene got dimmed', not 'a dramatic light was added' — this is "
+                            "the exact failure a judge will call underexposed/flat. Push your key light's "
+                            "intensity and/or narrow its range further so it genuinely outshines the "
+                            "baseline in its own pool, and check whether global grading (post_exposure/"
+                            "contrast/vignette) is eating the gain the light created."
+                        )
+                        if attempt == MAX_ATTEMPTS:
+                            _log_guardrail_rejection(
+                                task, attempt, "key_light_p90_lift",
+                                {"p90": contrast.p90, "baseline_p90": baseline_brightness.p90, "required_p90": required_p90},
+                                case_name, run_started_at,
+                            )
+                            shutil.copyfile(post_attempt_capture.path, shot_dir / "result.png")
+                            shutil.copyfile(post_attempt_capture.path, latest_dir / "result.png")
+                            print(f"[screenshot] result saved: {post_attempt_capture.path} (+ latest/)")
+                            return (
+                                f"Gave up after {MAX_ATTEMPTS} attempts. Final attempt was rejected: "
+                                f"key light never exceeded baseline brightness (p90={contrast.p90}, "
+                                f"needed {required_p90:.1f})."
+                            )
+                        continue  # skip the judge entirely, retry without burning that call
 
             passed, judgement = await judge_mood_match(task, image_path=post_attempt_capture.path)
             feedback = ""  # guardrail message (if any) consumed by this attempt, clear it
