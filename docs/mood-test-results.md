@@ -2105,3 +2105,65 @@ time, idempotent), but worth checking next session whether `save_scene()`
 is actually being called after `ensure_scene_ready()` adds it, or
 whether the Volume GameObject itself isn't surviving a scene reload for
 some other reason.
+
+## 2026-11-26 (cont'd again): spatial-grounding fix — horror 4/10 -> 7/10, confirmed on first retest
+
+Discussed the suite's failure pattern directly with Eran. Checked the
+actual archetype instructions rather than guessing — they already say
+exactly the right thing ("KEY must visibly shape the SPACE... a real
+falloff gradient on the floor/walls... not just glow at its own position
+while everything nearby stays black," FILL "never fully off, 10-30% of
+key"). The agent's own `reasoning` text for failing attempts echoed this
+exact language almost verbatim while still choosing `range=2.0-4.6` in
+rooms with a ~20+ unit diagonal — not a missing-concept problem, an
+execution-grounding problem: it understood the idea and had no number to
+calibrate against.
+
+Checked `get_scene_context()`: the scene bounding box WAS already being
+given to the agent (`get_scene_bounds()`), but only framed as a placement
+constraint ("don't put a light outside this box"), min/max corners with
+no diagonal and no instruction connecting room scale to a `range` choice.
+The model would've had to mentally derive a diagonal from six raw numbers
+and then decide what that implies for `range` — nothing did that
+translation for it.
+
+Built 3 things, in order, before retesting:
+1. `get_scene_context()`'s bounds section now states the diagonal directly
+   (pre-computed, not left for the model to derive) plus an explicit rule:
+   a KEY light's range should be at least 25-40% of the diagonal.
+2. Added the same rule to the KEY/FILL/RIM instructions block as a
+   craft requirement — explicitly framed as archetype-independent ("this
+   is a physical sizing rule, not a mood decision").
+3. Built a 4th deterministic guardrail (`RANGE_DIAGONAL_FRACTION_FLOOR =
+   0.25`) checking the claimed KEY light's real range against the real
+   scene diagonal (`get_scene_bounds()`) — same claim-vs-reality pattern
+   as every other guardrail this session, verified state, not self-report.
+
+Re-ran ONLY horror (the case that's failed every session this entire
+project). **Result: 7/10, PASS, on attempt 2** — up from 4/10 in the full
+suite run just before this fix. Notably, the guardrail never even had to
+fire: attempt 1 already picked `range=8.2` on its own, purely from being
+told the diagonal and the sizing rule (attempt 1 was rejected by the
+existing no-transform-change guardrail instead, unrelated). Attempt 2
+widened to `range=9.4`, moved the light, and the judge's critique
+qualitatively changed character: "a clear top-right directional key that
+creates strong, readable shadows across the room... corners and floor
+fall into deep shadow, giving the space a contained, uneasy feel" — a
+completely different class of critique than every prior horror attempt's
+"isolated bright dots... darkness doing the work instead of light
+design."
+
+This is the strongest evidence yet that the lighting agent's conceptual
+understanding was never the bottleneck — giving it one additional,
+precomputed number (the diagonal) and one sentence connecting it to
+`range` was enough to flip the result, with zero changes to the
+archetype's creative freedom or any numeric value constraints on color/
+intensity/mood direction.
+
+**Not yet done:** re-running the OTHER failing cases (eerie_lab, thriller,
+dreamlike, post_apocalyptic, noir) with this fix active — horror was
+deliberately tested alone first (Eran's call) to confirm the theory
+cheaply before spending a full suite run. Next session: re-run the full
+suite to see how many of the other 5 failures this same fix resolves,
+since the exact same judge-critique pattern was shared across all of
+them.

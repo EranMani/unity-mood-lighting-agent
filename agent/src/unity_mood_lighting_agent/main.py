@@ -45,7 +45,7 @@ from pathlib import Path
 from agents import Runner, trace
 from dotenv import load_dotenv
 
-from unity_mood_lighting_agent.agent import LightingDecision, Lever, agent, get_scene_context
+from unity_mood_lighting_agent.agent import LightingDecision, Lever, LightRole, agent, get_scene_context
 from unity_mood_lighting_agent.judge import judge_mood_match
 from unity_mood_lighting_agent.spatial_agent import ensure_spatial_breakdown, load_cached_spatial_breakdown
 from unity_mood_lighting_agent.tools import cleanup_agent_lights
@@ -63,6 +63,7 @@ from unity_mood_lighting_agent.unity_bridge import (
     get_color_adjustments,
     get_fog,
     get_light_properties,
+    get_scene_bounds,
     get_skybox,
     get_vignette,
     image_to_data_url,
@@ -115,6 +116,17 @@ LOG_PATH = REPO_ROOT / "mood_test_log.jsonl"
 # the whole frame) would be more principled than any whole-frame
 # percentile ratio — flagged for a future session, not solved here.
 KEY_LIGHT_P90_LIFT_FLOOR = 0.15
+
+# Found via the full eval suite (2026-11-26): every "restrained"-archetype
+# failure shared the identical judge complaint (isolated bright dots, no
+# real shadow-shaping key) while the agent's own reasoning used the exact
+# right vocabulary -- it understood the concept, it just picked a `range`
+# disconnected from the room's real physical scale (nothing in its prompt
+# connected the scene bounding box to a range number before this). This
+# guardrail checks the claimed KEY light's real range against the scene's
+# real diagonal (get_scene_bounds) -- a KEY that only reaches a fraction
+# of the room this small is lighting its own local radius, not the room.
+RANGE_DIAGONAL_FRACTION_FLOOR = 0.25
 
 
 def _snapshot_lever_state() -> dict:
@@ -854,6 +866,55 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                                 f"Gave up after {MAX_ATTEMPTS} attempts. Final attempt was rejected: "
                                 f"key light never exceeded baseline brightness (p90={contrast.p90}, "
                                 f"needed {required_p90:.1f})."
+                            )
+                        continue  # skip the judge entirely, retry without burning that call
+
+                # Fourth deterministic guardrail (2026-11-26): the claimed
+                # KEY light's real range vs. the scene's real diagonal —
+                # see RANGE_DIAGONAL_FRACTION_FLOOR's comment for why.
+                key_assignments = [a for a in decision.light_role_assignments if a.role == LightRole.KEY]
+                if key_assignments:
+                    bounds = get_scene_bounds()
+                    required_range = bounds.diagonal * RANGE_DIAGONAL_FRACTION_FLOOR
+                    undersized = [
+                        (a.instance_id, real_range)
+                        for a in key_assignments
+                        if (real_range := get_light_properties(a.instance_id).range) is not None
+                        and real_range < required_range
+                    ]
+                    if undersized:
+                        print(
+                            f"[guardrail] attempt {attempt}/{MAX_ATTEMPTS} KEY light range too small "
+                            f"for the room ({undersized}, need >= {required_range:.1f} = "
+                            f"{RANGE_DIAGONAL_FRACTION_FLOOR * 100:.0f}% of diagonal {bounds.diagonal:.1f}) "
+                            "— skipping judge call"
+                        )
+                        feedback = (
+                            f"Your claimed KEY light(s) {[u[0] for u in undersized]} have range(s) "
+                            f"{[u[1] for u in undersized]}, but the scene's diagonal is "
+                            f"{bounds.diagonal:.1f} — a KEY light's range needs to be at least "
+                            f"{required_range:.1f} ({RANGE_DIAGONAL_FRACTION_FLOOR * 100:.0f}% of the "
+                            "diagonal) to actually reach a meaningful portion of the room's floor/"
+                            "walls. At its current range, this light only lights its own small local "
+                            "radius — exactly the 'bright dot in the dark' failure, not a real "
+                            "shadow-shaping key, no matter how high its intensity is. Widen the range "
+                            "(or reposition it so a wider range still fits the mood) rather than only "
+                            "raising intensity."
+                        )
+                        attempt_history.append({"role": "user", "content": [{"type": "input_text", "text": feedback}]})
+                        if attempt == MAX_ATTEMPTS:
+                            _log_guardrail_rejection(
+                                task, attempt, "key_light_range_too_small",
+                                {"undersized": undersized, "required_range": required_range, "diagonal": bounds.diagonal},
+                                case_name, run_started_at,
+                            )
+                            shutil.copyfile(post_attempt_capture.path, shot_dir / "result.png")
+                            shutil.copyfile(post_attempt_capture.path, latest_dir / "result.png")
+                            print(f"[screenshot] result saved: {post_attempt_capture.path} (+ latest/)")
+                            return (
+                                f"Gave up after {MAX_ATTEMPTS} attempts. Final attempt was rejected: "
+                                f"KEY light range too small for the room ({undersized}, needed >= "
+                                f"{required_range:.1f})."
                             )
                         continue  # skip the judge entirely, retry without burning that call
 
