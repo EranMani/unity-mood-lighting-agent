@@ -1878,3 +1878,111 @@ shapes the room — it's dimming/cooling things uniformly, not lighting
 them dramatically. Next session: re-run the full 10-case eval suite
 under the new judge to get an honest current baseline before any more
 tuning.
+
+## 2026-11-26 (cont'd): the REAL key-light root cause — a 10x intensity unit mismatch, not a concept gap
+
+Eran pushed on the key-light problem directly: "the agent doesn't
+understand studio lighting." Proposed a structured-output fix mirroring
+the proven `Lever` enum pattern — force the agent to explicitly assign
+a `LightRole` (KEY/FILL/RIM/PRACTICAL/UNUSED) to EVERY light in the
+scene, every attempt, with real reasoning, instead of hoping prose
+instructions stick. Built it (`LightRole` enum, `LightRoleAssignment`,
+`light_role_assignments` field on `LightingDecision`, logged per-attempt
+in `main.py`). Deliberately NOT capped at one KEY per attempt — observe
+real usage first, decide on a cap later if ever needed.
+
+**This immediately disproved the "doesn't understand" theory.** Live
+test: the agent's own reasoning for a self-created key light read
+*"it shapes the wall/shelf geometry and gives the room a second
+readable pool so the scene doesn't feel like isolated dots in black"*
+— literally pre-empting the judge's own failure-mode language. Then the
+actual render was still almost pure black, a handful of blue dots,
+nothing else. The agent's PLAN was correct. Its EXECUTION wasn't
+working. That reframed the whole investigation: not a concept problem
+anymore, an execution/calibration problem.
+
+**Debugging the execution gap, step by step, all empirical:**
+1. Boosted the "key" light 6x in place — brightness barely moved
+   (14.1→14.1). Boosted the room's own ORIGINAL untouched fixtures 10x
+   — also no change. Ruled out anything light-specific (e.g. a new
+   light's culling mask).
+2. Disabled fog entirely — no change. Ruled out fog.
+3. Brute-force intensity sweep up to 50,000 (vs. the project's sane
+   range of 0-20) — finally saw real response (mean 14→40, p90 cleared
+   baseline). Looked like a catastrophic unit-scale mismatch.
+4. Searched Unity's OWN official docs before touching any code (Eran's
+   explicit instruction, don't guess). Found URP's documented default
+   Point/Spot intensity is just "1" (plain small scale, matching this
+   project's whole convention) — directly contradicting a forced
+   physical-units theory.
+5. Queried the actual scene's lights directly: EVERY light (including
+   the room's own untouched original fixtures, never touched by any of
+   our tools) is tagged `lightUnit=Candela`.
+6. Tested whether that tag does anything: switched Candela→Lumen at a
+   FIXED intensity (3.0) — byte-identical render, zero difference.
+   Confirmed via more official docs (HDRP's `HDAdditionalLightData`/
+   `LightUnitUtils` API) that `lightUnit`/physical-unit conversion is
+   an HDRP-only concept; URP has no such toggle, it just reads
+   `Light.intensity` as a raw scalar in its own attenuation math and
+   ignores the unit tag completely. **There is no legacy/physical
+   switch to flip — this needed a code fix, not a settings fix,
+   confirmed rather than assumed.**
+7. Re-ran the intensity sweep PROPERLY isolated this time (one light,
+   zero ambient/grading) — found the earlier "needs 50,000" result was
+   a confound: that scene state also had extremely aggressive leftover
+   grading (contrast=58+) crushing everything regardless of light
+   intensity. Clean isolated sweep: real=1 already gives mean=49,
+   fully saturates by real~600-1000 — URP's own attenuation math at
+   this scene's real meter-scale distances, not a units problem at all.
+8. Re-swept under REALISTIC moderate grading (not zero, not extreme) to
+   find the actually usable range: real=200 alone reproduces this
+   project's historical "good baseline" mean brightness (84.8) almost
+   exactly. **real=200 = nice=20 (the existing sane-range ceiling) x
+   10** — a clean, empirically-grounded anchor.
+
+**Fix (Eran's call): a single conversion utility, not a codebase-wide
+rewrite.** `LIGHT_INTENSITY_REAL_PER_NICE = 10.0` in `unity_bridge.py`,
+with `nice_to_real_intensity()`/`real_to_nice_intensity()` applied
+ONLY at the two agent-facing boundary functions
+(`set_light_properties` write, `get_light_properties` read) — every
+guardrail, instruction, doc, and the agent itself keep operating in the
+familiar 0-20 "nice" scale unchanged; only the actual Unity write/read
+gets the x10 conversion. `capture_scene_baseline`/`restore_scene_baseline`
+talk to Unity in raw native units directly and were deliberately left
+untouched (internal snapshot, never agent-facing).
+
+**Caught and fixed a real bug this same fix introduced, before it did
+damage:** the two original scene lights' raw intensity (0.81, 2.17)
+was captured into the baseline file back before this conversion
+existed — plain small numbers, literally what was always in Unity's
+raw field. The new `get_light_properties` unconditionally divides
+whatever it reads by 10, so those same raw baseline numbers started
+reporting as 0.081/0.217 — DOUBLE-dividing values that were never
+"real" scaled to begin with, making the room's own original fixtures
+look nearly dead. Fixed by migrating: re-wrote the true historical
+"nice" values (0.81, 2.17) through `set_light_properties` so they get
+correctly written as real=8.1/21.7 this time, then recaptured a fresh
+baseline (mean brightness 84.8→99.0, genuinely brighter now that those
+original fixtures finally contribute real, visible light instead of
+being silently negligible this whole project's history).
+
+**Verified live, immediately:** horror test score climbed from 3-4/10
+to 5/10 — a real jump, and qualitatively a completely different
+result. The agent's own intensity choices for its key light (7.5 →
+10.5 → 14.5 across 3 attempts) landed almost exactly on this project's
+long-standing historical reference ("key intensity=14.5, not timid,"
+first recorded 2026-11-25) — and for the first time, that familiar
+number actually produced a fully legible room: real directional key
+light, visible shadow falloff on walls/floor, convincing cold horror
+palette. Best frame this project has ever produced, full stop. Judge's
+remaining critique (*"underexposed and flat in the middle... shadow
+shapes not especially dramatic"*) is now genuine mood-quality feedback,
+not "there is basically no lighting happening" — a fundamentally
+different, much more tractable class of problem.
+
+**The real lesson:** the agent never had a conceptual gap about
+key/fill/rim lighting. It had been operating on an intensity scale
+that was silently 10x too small for this specific scene's real render
+math this entire project's history, and no "well-lit" result ever
+proved otherwise because ambient (unrelated to this bug) was carrying
+almost all of the visible brightness in every prior "good" scene.

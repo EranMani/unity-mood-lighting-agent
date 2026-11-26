@@ -530,6 +530,8 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                 f"target_contrast={decision.mood_breakdown.target_contrast.value} "
                 f"changes={decision.changes_summary}"
             )
+            for assignment in decision.light_role_assignments:
+                print(f"  [role] {assignment.instance_id}: {assignment.role.value} — {assignment.reasoning}")
             for o in list_scene_transforms():
                 if o.is_light:
                     lp = get_light_properties(o.instance_id)

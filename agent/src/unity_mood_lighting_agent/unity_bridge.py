@@ -526,6 +526,50 @@ _SHADOW_TYPE_DISPLAY_TO_NAME = {
 }
 _SHADOW_TYPE_NAME_TO_INT = {"none": 0, "hard": 1, "soft": 2}
 
+# Light intensity unit conversion (2026-11-26, Eran's call) — the "nice"
+# 0-20ish scale every guardrail/instruction/doc in this project has ever
+# assumed (inherited from Unity's old Built-in-RP-style small intensity
+# numbers) is NOT what this scene's URP Light.intensity actually responds
+# to. Confirmed empirically, not guessed: switching a light's lightUnit
+# tag (Candela/Lumen) at a fixed intensity produced byte-identical
+# renders — URP ignores that tag entirely, it's an HDRP-only concept,
+# there is no legacy/physical toggle to flip. URP just uses raw
+# Light.intensity as a scalar in its own attenuation math, and at this
+# scene's real meter-scale distances that math needs numbers roughly
+# 10x bigger than the project's historical convention to produce
+# equivalent visible brightness.
+#
+# Calibrated via two live intensity sweeps on this scene, isolating one
+# light at a time: fully zeroed-out ambient/grading (confirms raw
+# response curve) and moderate realistic horror-style grading (confirms
+# the working range under conditions the agent actually produces).
+# real=200 alone (zero ambient, nothing else contributing) reproduces
+# this project's historical "good baseline" mean brightness (84.8)
+# almost exactly — and 200 = 20 (the existing sane-range ceiling) * 10,
+# a clean anchor. This is an empirically-fit multiplier for THIS scene's
+# geometry/scale, not a universal physical conversion — revisit if the
+# scene changes drastically (see docs/mood-test-results.md for the full
+# calibration data and reasoning).
+#
+# Applied ONLY at the two agent-facing boundary functions below
+# (set_light_properties writes, get_light_properties reads) — NOT in
+# capture_scene_baseline/restore_scene_baseline, which talk to Unity in
+# raw native units directly and are never agent-facing.
+LIGHT_INTENSITY_REAL_PER_NICE = 10.0
+
+
+def nice_to_real_intensity(nice: float) -> float:
+    """Convert the agent-facing 'nice' intensity scale (0-20ish) to the
+    real Light.intensity value this scene's URP actually needs."""
+    return nice * LIGHT_INTENSITY_REAL_PER_NICE
+
+
+def real_to_nice_intensity(real: float) -> float:
+    """Inverse of nice_to_real_intensity — convert Unity's raw
+    Light.intensity back to the 'nice' scale the agent/guardrails see."""
+    return real / LIGHT_INTENSITY_REAL_PER_NICE
+
+
 
 class LightProperties(BaseModel):
     """Current/target values for a Light component's mood-relevant fields."""
@@ -573,7 +617,7 @@ def get_light_properties(target: str) -> LightProperties:
     shadow_type_raw = shadows.get("m_Type")
     shadow_type = _SHADOW_TYPE_DISPLAY_TO_NAME.get(shadow_type_raw, shadow_type_raw) if shadow_type_raw else None
     return LightProperties(
-        intensity=raw.get("m_Intensity"),
+        intensity=real_to_nice_intensity(raw["m_Intensity"]) if raw.get("m_Intensity") is not None else None,
         color_r=color.get("r"),
         color_g=color.get("g"),
         color_b=color.get("b"),
@@ -613,7 +657,7 @@ def set_light_properties(
     alone can't express."""
     calls: list[tuple[str, object]] = []
     if intensity is not None:
-        calls.append(("m_Intensity", intensity))
+        calls.append(("m_Intensity", nice_to_real_intensity(intensity)))
     if color is not None:
         calls.append(("m_Color", {"r": color[0], "g": color[1], "b": color[2], "a": 1.0}))
     if color_temperature is not None:

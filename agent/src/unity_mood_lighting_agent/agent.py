@@ -123,6 +123,46 @@ class MoodBreakdown(BaseModel):
     key_visual_choices: str = Field(description="1-2 sentences: the specific color story and lighting approach that will sell this mood (e.g. 'warm key light + saturated red/green/gold accents, minimal fog, soft shadows').")
 
 
+class LightRole(str, Enum):
+    """Studio-lighting role for a single light, EVERY light in the scene,
+    every attempt (2026-11-26, Eran's call) — not a free-text description.
+    Direct response to a real failure the new strict judge persona caught:
+    the agent keeps producing scenes with small self-illuminating glows
+    (a screen, a ceiling panel) while the room around them stays
+    near-black, and prose instructions about 'key/fill/rim' alone weren't
+    making it actually reason about which light is doing which job. Same
+    fix pattern as the Lever enum: force explicit per-light accounting
+    instead of hoping prose sticks.
+
+    Deliberately NOT capped at one KEY per attempt (Eran's call) — some
+    moods may genuinely want two strong competing keys (e.g. a double
+    exposure or a two-source dramatic scene). Not enforced as a guardrail
+    yet; observe real usage first, decide whether a cap is ever needed
+    once there's real data, not a guess."""
+
+    KEY = "key"  # the dominant light. Must visibly shape the SPACE around it (floor/wall gradient, real shadow falloff), not just glow at its own position.
+    FILL = "fill"  # secondary, keeps shadows readable without flattening the key's drama. Roughly 10-30% of the key's intensity — never fully off, never competing with the key.
+    RIM = "rim"  # edge/backlight separation, pulls a subject's silhouette off the background. Usually the weakest of the three in intensity.
+    PRACTICAL = "practical"  # a light that exists to glow ITSELF (a screen, a sign, a lamp fixture) rather than to illuminate the room around it. Legitimate role, but does NOT count as lighting the scene — a frame with only PRACTICAL lights and a black room is the exact failure mode the judge now explicitly fails.
+    UNUSED = "unused_this_attempt"  # exists in the scene, deliberately not touched or leaned on this attempt
+
+
+class LightRoleAssignment(BaseModel):
+    """One light's role for this attempt. Every light currently in the
+    scene gets an entry — exhaustive, same as LeverUsage — specifically so
+    main.py (and future tooling) can see how the agent is mapping the
+    scene's lights, not just infer it from raw intensity/color numbers."""
+
+    instance_id: str = Field(description="The light's instance_id from the scene context.")
+    role: LightRole
+    reasoning: str = Field(
+        description="Why this role for this light. If role=KEY: describe HOW it shapes the geometry "
+        "around it (what falls in its pool of light, where the falloff/shadow boundary lands) — "
+        "'it's bright' is not an answer, 'it's a screen glowing in a dark room' is PRACTICAL, not KEY. "
+        "If role=UNUSED: say why this light isn't needed for this mood, not just 'not needed'."
+    )
+
+
 class LightingDecision(BaseModel):
     """Structured final output. Field order is generation order — same
     reasoning-first technique as judge.py's MoodJudgement, extended one
@@ -131,6 +171,15 @@ class LightingDecision(BaseModel):
     and must be non-trivial — this is what main.py logs into
     attempt_history for the next retry, a bare 'Done.' is not useful
     there and shouldn't be possible with a described required field.
+
+    light_role_assignments (2026-11-26, Eran's call): placed right after
+    reasoning, same forcing-function pattern as lever_accounting below,
+    added for the same reason — prose instructions about key/fill/rim
+    alone weren't making the agent actually reason about which light is
+    doing which job. Not yet cross-verified against real render data the
+    way lever_accounting is (that needs a per-light ROI brightness check,
+    flagged for later) — for now this is a planning aid and a visibility
+    tool, not a guardrail.
 
     lever_accounting (2026-11-25, Eran's call): placed AFTER reasoning
     so the per-lever checklist is informed by the plan, and BEFORE
@@ -142,6 +191,14 @@ class LightingDecision(BaseModel):
 
     mood_breakdown: MoodBreakdown
     reasoning: str = Field(description="Given the mood_breakdown, the current scene state, and any previous attempt's score/feedback, explain what you are about to change and why. Write this BEFORE making tool calls.")
+    light_role_assignments: list[LightRoleAssignment] = Field(
+        description="EVERY light in the scene by the end of this attempt — every light from the scene "
+        "context PLUS any you create this attempt via create_light — each assigned a LightRole with real "
+        "reasoning. This is your studio-lighting plan, made explicit: decide which light is doing the "
+        "KEY's work, which is FILL, which is RIM, which is just a PRACTICAL prop glow, and which you're "
+        "genuinely not using. Plan this BEFORE making tool calls, same as reasoning — it should drive "
+        "what you actually do with each light, not describe it after the fact."
+    )
     lever_accounting: list[LeverUsage] = Field(
         description="EVERY lever in the Lever enum, every attempt, each marked changed=True/False with a real "
         "reason. Levers are NOT mutually exclusive — combining several in one attempt (e.g. position + "
@@ -199,10 +256,17 @@ agent = Agent(
         "THREE-POINT LIGHTING (classic film/game lighting-director "
         "structure — use it, don't improvise a flat substitute): for any "
         "THREAT/DRAMATIC mood, build from KEY + FILL + RIM, not just "
-        "'one light, kill everything else':\n"
+        "'one light, kill everything else'. Your light_role_assignments "
+        "output field is where you commit to this explicitly, per light "
+        "— write it as a real plan BEFORE your tool calls, not a "
+        "description of what you already did:\n"
         "- KEY: the single dominant light. Decides the mood's color, "
         "direction, and hardness. This is what the scene's other levers "
-        "(position/rotation/range/color) should be built around.\n"
+        "(position/rotation/range/color) should be built around. It "
+        "must visibly shape the SPACE around it — a real falloff "
+        "gradient on the floor/walls, a real shadow boundary — not just "
+        "glow brightly at its own position while everything nearby "
+        "stays black.\n"
         "- FILL: a much dimmer secondary light (or the scene's OTHER "
         "existing lights, retuned) — roughly 10-30% of the key's "
         "intensity, never fully off. Its job is to keep the shadow side "
@@ -220,7 +284,16 @@ agent = Agent(
         "aimed back toward camera-ish, that traces a thin edge of light "
         "separating the subject from a dark background — the single "
         "most reliable way to make a dark scene still read as deliberate "
-        "and composed rather than just underlit.\n\n"
+        "and composed rather than just underlit.\n"
+        "- PRACTICAL: a light that exists to glow ITSELF (a screen, a "
+        "sign, a fixture) rather than to illuminate the room around it. "
+        "A legitimate thing to have, but it does NOT substitute for a "
+        "KEY — a frame where the only visible light sources are small "
+        "glowing props, while the floor/walls/room around them stay "
+        "near-pure black, is the exact failure mode the judge now "
+        "explicitly and strictly fails, no matter how 'atmospheric' it "
+        "looks at a glance. If you tag something PRACTICAL, it should "
+        "NOT be your only light doing real work this attempt.\n\n"
         "DECISIVE KEY LIGHT, VERIFIED NOT ASSUMED: a key light only "
         "counts as genuinely dominant if the frame's own measured "
         "BRIGHT zone ends up clearly above this scene's untouched "
