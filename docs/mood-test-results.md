@@ -2167,3 +2167,65 @@ cheaply before spending a full suite run. Next session: re-run the full
 suite to see how many of the other 5 failures this same fix resolves,
 since the exact same judge-critique pattern was shared across all of
 them.
+
+## 2026-11-26 (cont'd again): re-ran the other 5 failures — range fix confirmed working mechanically, but not the only bottleneck
+
+Ran eerie_lab, thriller, dreamlike, post_apocalyptic, noir with the
+range/diagonal fix active. **0/5 passed**, same as before the fix in
+raw pass/fail terms — but the DATA tells a more useful story than that
+headline:
+
+- **Confirmed the fix is working exactly as designed, mechanically.**
+  Every single attempt across all 5 cases now picks ranges in the
+  6-10 unit zone (correctly sized against the ~22.8 diagonal) — the
+  undersized-range problem that caused horror's failure is gone across
+  the board. The theory wasn't wrong; it just wasn't the ONLY
+  bottleneck for these 5. Confirms this was worth building regardless
+  of today's pass count — it's load-bearing infrastructure other fixes
+  now sit on top of.
+- eerie_lab/thriller/dreamlike scored the **identical 5/10** as before
+  the fix — for these three specifically, range was never the limiting
+  factor; whatever else the judge wants is still unmet with a correctly
+  sized key.
+- **post_apocalyptic hit a newly-visible real bug, not a self-report
+  reliability issue.** noir's attempt 2 said outright: "The attempted
+  reposition of the fill was rejected, so only the key's transform
+  actually changed" — confirmed in code: `tools.py`'s
+  `_check_within_bounds()` returns a REJECTION STRING (not an
+  exception) when a proposed position is outside the scene's real
+  bounding box, and the agent is expected to retry with a valid
+  position within that same turn. Sometimes it does; here it didn't,
+  and ended up reporting the rejection as a fact in its final decision
+  instead of recovering from it — which then trips the
+  `no_transform_change` guardrail in a loop it can't escape within 3
+  attempts. This reframes the earlier "self-report mismatch" findings
+  from thriller/noir in the full suite run: at least some of those
+  weren't the agent fabricating a claim, they were genuine attempted
+  moves that got silently rejected by a real tool-level bounds check,
+  with inconsistent follow-through on reporting that rejection
+  accurately in `lever_accounting`.
+- **noir hit the `KEY_LIGHT_P90_LIFT_FLOOR` guardrail's own
+  already-documented limitation** (flagged in that guardrail's comment
+  months ago, never fixed): a legitimately strong, well-shaped key
+  light (intensity=12.5, range=9.8 this run) in a spatially localized
+  pool doesn't move the WHOLE-FRAME 90th-percentile brightness much if
+  its pool only covers a modest fraction of the frame — the guardrail
+  can't see a real, good key light that isn't also lighting most of
+  the frame. The project's own prior self: "a real fix (comparing
+  brightness within the key light's own intended pool/ROI rather than
+  the whole frame) would be more principled" — now has a concrete,
+  reproduced case motivating actually building it.
+
+**Honest read, not spin:** the range/diagonal fix was real, verified
+working, and necessary — but this session's remaining budget ran out
+before closing the next two gaps it surfaced. Next session's two most
+concrete next moves, in priority order:
+1. Fix the position/rotation retry-on-rejection behavior — either make
+   the agent reliably retry within the same turn after a bounds
+   rejection (instruction fix), or have `main.py` surface the rejection
+   explicitly in feedback so the NEXT attempt knows to try a different
+   position (same pattern as every other guardrail-feedback loop).
+2. Build the long-flagged per-light ROI brightness check instead of
+   the whole-frame p90 ratio — `light_role_assignments` already tells
+   us exactly which light/position is the KEY each attempt, so this is
+   finally buildable with data already being collected.
