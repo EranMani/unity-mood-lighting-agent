@@ -1777,3 +1777,42 @@ miscalibrations: `eerie_lab`'s final attempt measured pct_near_black=
 `thriller`'s p90=21.0 missed its required 21.8 by under 4%, a genuine
 near-miss. Stopped recalibrating here — further gains from here are
 real agent/mood-quality tuning, not guardrail-calibration bugs.
+
+## 2026-11-26 (Phase 0+1): color-temp bug, shadow strength, skybox tint, tonemapping
+
+Phase 0 diagnostics (free, code-only) on the real scene confirmed:
+`m_UseColorTemperature=false` on BOTH scene lights (every past
+`color_temperature` write was a silent no-op), no Tonemapping override
+at all, camera/pipeline HDR already enabled (Bloom clear to build later).
+
+Fixes shipped:
+- `set_light_properties` now forces `m_UseColorTemperature=true`
+  whenever `color_temperature` is set.
+- New `shadow_strength` lever (0-1, how dark a shadow renders),
+  independent of `shadow_type` (whether one exists at all).
+- New skybox `tint` (r,g,b) lever — free color wash on the sky AND
+  indoor ambient (skybox-driven here), on top of any HDRI choice.
+- Added a Neutral Tonemapping override (project had none). A/B tested
+  live on the real clean baseline: None (mean=83.4, p90=97.0) and
+  Neutral (mean=84.8, p90=98.0) are nearly identical; ACES (mean=52.9,
+  p90=66.0) is meaningfully darker from its filmic shadow-crushing toe
+  — the wrong direction for a project whose #1 recurring bug is
+  accidental crushing. Neutral chosen, not ACES.
+
+New bug found and fixed in the same pass: once color_temperature
+actually works, the agent was still reflexively cooling light `color`
+(RGB) at the same time — the two levers multiply, so a cool RGB tint
+*and* a cool Kelvin value together double-cool and double-dim a light,
+crushing the scene even at modest intensity. `agent.py` now explicitly
+warns against stacking both on the same light.
+
+Re-captured baseline on the corrected setup: mean=84.8, p90=98.0.
+Validated live (horror + noir): both ran end-to-end cleanly, no
+regression, no recurrence of the double-cooling crush.
+
+**New finding, flagged not fixed:** the noir test produced a genuinely
+good, legible monochrome frame (full B&W via saturation=-100) that the
+grading-severity guardrail rejected anyway (4.44 vs floor 3.9). The
+severity formula likely overcounts intentional full desaturation as
+crush risk the same way it counts blown-out exposure — those aren't
+the same failure mode. Next session.
