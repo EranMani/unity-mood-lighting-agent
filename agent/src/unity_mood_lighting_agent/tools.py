@@ -215,10 +215,17 @@ def set_light_properties(
     shadow_strength: float | None = None,
 ) -> str:
     """Set a Light's intensity, color (RGB, each 0-1, give all 3 together),
-    color temperature in Kelvin (lower=warmer, e.g. 1800=candle, 6500=cool
-    daylight), bounce/indirect intensity, range, spot_angle, shadow_type,
-    and/or shadow_strength. Omit any field to leave it unchanged. target is
+    bounce/indirect intensity, range, spot_angle, shadow_type, and/or
+    shadow_strength. Omit any field to leave it unchanged. target is
     the instance_id from the scene context.
+
+    Use color (RGB) for ALL tinting needs, warm, cool, toxic green,
+    alien purple, neon, anything. There is also a color_temperature
+    param (Kelvin) but don't use it: it only moves along the real
+    blackbody curve (orange -> white -> blue, can't do green/purple/
+    cyan at all), and it multiplies with color rather than adding, so
+    touching both at once silently double-shifts and double-dims the
+    light. RGB alone covers everything you need.
 
     range (Point/Spot only, world-space units the light reaches) is the
     lever that controls whether a light reads as a TIGHT CONTAINED POOL
