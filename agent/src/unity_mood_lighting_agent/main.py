@@ -10,6 +10,17 @@ up and report the last judgement if still failing. Each retry re-reads the
 CURRENT live scene state (get_scene_context()), not the original state —
 attempt 2 builds on whatever attempt 1 actually left in the scene.
 
+Retry feedback is REAL conversation history (2026-11-26, Eran's call), not
+a flattened recap string rebuilt each attempt — attempt_history alternates
+real assistant turns (the agent's own serialized decision, including its
+light_role_assignments claims) and user turns (guardrail or judge
+feedback). Deliberately asymmetric with judge.py: the judge stays
+stateless/fresh every call (a judge with memory of its own past verdicts
+would be tempted to score a "trying to improve" frame higher regardless
+of whether it deserves it) — only the agent gets continuity, since it's
+the one that needs to notice "I claimed this light was KEY last attempt
+and it still didn't work."
+
 Every run appends one row to mood_test_log.jsonl (task, attempts, final
 score, pass/fail, notes) — Eran asked for a persistent record of mood
 test results after compiling docs/mood-test-results.md by hand from
@@ -303,6 +314,52 @@ def _describe_lever_diff(before: dict, after: dict) -> str:
         if field_diffs:
             lines.append(f"    {key}: " + "; ".join(field_diffs))
     return "\n".join(lines) if lines else "    (no scene-state change detected)"
+
+
+def _serialize_decision(
+    attempt: int,
+    decision: LightingDecision,
+    attempt_levers: set[str],
+    created_lights: set[str],
+    deleted_lights: set[str],
+    real_light_state: list[dict],
+) -> str:
+    """Build the assistant-turn text fed back as real conversation history
+    (2026-11-26, Eran's call) — hybrid prose+JSON, not one giant JSON blob:
+    reasoning/changes_summary are narrative judgment with nothing
+    structural to represent, so they stay plain prose, matching every
+    other agent-facing text in this file (get_scene_context() etc). The
+    parts that ARE records (role claims, the VERIFIED diff, real light
+    state) go in as JSON, where precision matters and paraphrasing would
+    lose it. role_assignments is the agent's CLAIM; real_light_state is
+    what's actually true (from get_light_properties, not self-report) —
+    deliberately placed side by side so a future attempt can see "I called
+    light X my KEY" next to "light X's real intensity was Y", closing the
+    claim-vs-reality gap the whole light_role_assignments field exists
+    to expose. attempt_levers/created_lights/deleted_lights are the
+    VERIFIED diff (_diff_levers), never decision.lever_accounting's
+    self-report — same principle already applied to the console log."""
+    role_json = json.dumps(
+        [
+            {"instance_id": a.instance_id, "role": a.role.value, "reasoning": a.reasoning}
+            for a in decision.light_role_assignments
+        ],
+        indent=2,
+    )
+    state_json = json.dumps(real_light_state, indent=2)
+    return (
+        f"YOUR DECISION (attempt {attempt}):\n"
+        f"Reasoning: {decision.reasoning}\n\n"
+        f"Your role assignments:\n{role_json}\n\n"
+        f"VERIFIED changes (real scene diff, not self-report):\n"
+        f"levers changed: {sorted(attempt_levers)}\n"
+        f"lights created: {sorted(created_lights)}\n"
+        f"lights deleted: {sorted(deleted_lights)}\n\n"
+        f"Real light state after this attempt (not your claim — ground truth):\n{state_json}\n\n"
+        f"Changes summary: {decision.changes_summary}"
+    )
+
+
 SCREENSHOTS_DIR = REPO_ROOT / "screenshots"
 
 
@@ -439,8 +496,9 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
     shutil.copyfile(baseline_shot.path, latest_dir / "baseline.png")
     print(f"[screenshot] baseline saved: {baseline_shot.path} (+ latest/)")
 
-    feedback = ""  # judge's notes from the previous failed attempt, if any
-    attempt_history: list[dict] = []  # every prior attempt's own summary + score, oldest first
+    feedback = ""  # guardrail/judge message from THIS iteration, turned into a history turn before the next loop pass
+    attempt_history: list[dict] = []  # REAL conversation turns (role/content), not a flattened string recap — alternates assistant (own decision) / user (feedback)
+    scores_this_run: list[int] = []  # real judge scores only, for the stall-detection nudge below — guardrail-only rejections never reach the judge so don't count here
 
     with trace(
         workflow_name="mood_lighting_agent",
@@ -462,25 +520,15 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                     "near-black much later. This does not apply to soft/diffuse moods where a gentle "
                     "intensity genuinely is the right choice."
                 )
-            if attempt_history:
-                history_lines = "\n".join(
-                    f"- Attempt {h['attempt']}: you did \u2014 {h['action']} \u2192 judge score {h['score']}/10. "
-                    f"Judge said: {h['notes']}"
-                    for h in attempt_history
+            if len(scores_this_run) >= 2 and scores_this_run[-1] <= scores_this_run[-2]:
+                prompt_text += (
+                    "\n\nNOTE: your score did NOT improve (or got worse) on the last "
+                    "attempt despite the change you made. Pushing the same lever "
+                    "harder is not working \u2014 try a DIFFERENT lever this time (e.g. if "
+                    "you've been adding/intensifying lights, try color grading/vignette/"
+                    "fog instead, or vice versa; or change composition \u2014 fewer, more "
+                    "deliberate color choices instead of more lights)."
                 )
-                prompt_text += f"\n\nPrevious attempts this run (oldest first):\n{history_lines}"
-                scores = [h["score"] for h in attempt_history]
-                if len(scores) >= 2 and scores[-1] <= scores[-2]:
-                    prompt_text += (
-                        "\n\nNOTE: your score did NOT improve (or got worse) on the last "
-                        "attempt despite the change you made. Pushing the same lever "
-                        "harder is not working \u2014 try a DIFFERENT lever this time (e.g. if "
-                        "you've been adding/intensifying lights, try color grading/vignette/"
-                        "fog instead, or vice versa; or change composition \u2014 fewer, more "
-                        "deliberate color choices instead of more lights)."
-                    )
-            if feedback:
-                prompt_text += f"\n\n{feedback}"
             if levers_touched_this_run:
                 never_touched = sorted({lv.value for lv in Lever} - levers_touched_this_run)
                 prompt_text += (
@@ -504,15 +552,18 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
             # get_scene_context() re-reading fresh each time.
             capture = capture_game_view()
             image_url = image_to_data_url(capture.path)
-            prompt = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": prompt_text},
-                        {"type": "input_image", "image_url": image_url},
-                    ],
-                }
-            ]
+            current_turn = {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": prompt_text},
+                    {"type": "input_image", "image_url": image_url},
+                ],
+            }
+            # attempt_history carries real prior turns (2026-11-26, Eran's
+            # call) — the agent's own serialized decision + the feedback
+            # that followed it, alternating, instead of a flattened recap
+            # string rebuilt from scratch each time.
+            prompt = attempt_history + [current_turn]
 
             result = await Runner.run(agent, prompt)
             decision: LightingDecision = result.final_output
@@ -532,12 +583,23 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
             )
             for assignment in decision.light_role_assignments:
                 print(f"  [role] {assignment.instance_id}: {assignment.role.value} — {assignment.reasoning}")
+            real_light_state = []
             for o in list_scene_transforms():
                 if o.is_light:
                     lp = get_light_properties(o.instance_id)
                     print(
                         f"  [light] {o.name}: intensity={lp.intensity} range={lp.range} "
                         f"shadow_type={lp.shadow_type} color=({lp.color_r:.2f},{lp.color_g:.2f},{lp.color_b:.2f})"
+                    )
+                    real_light_state.append(
+                        {
+                            "instance_id": o.instance_id,
+                            "name": o.name,
+                            "intensity": lp.intensity,
+                            "range": lp.range,
+                            "shadow_type": lp.shadow_type,
+                            "color": [round(lp.color_r or 0.0, 2), round(lp.color_g or 0.0, 2), round(lp.color_b or 0.0, 2)],
+                        }
                     )
 
             # Deterministic lever-usage diff, same scene-reads as above —
@@ -554,6 +616,20 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                 f"  [levers] verified_changed={sorted(attempt_levers)} "
                 f"self_reported_changed={sorted(self_reported)}"
                 + (f" MISMATCH={sorted(mismatch)}" if mismatch else "")
+            )
+
+            # Real conversation turn, not a flattened recap (2026-11-26,
+            # Eran's call) — this attempt's actual decision goes into
+            # attempt_history as an assistant turn; the feedback that
+            # follows (guardrail or judge) becomes the paired user turn
+            # below, at whichever branch this attempt falls into.
+            attempt_history.append(
+                {
+                    "role": "assistant",
+                    "content": _serialize_decision(
+                        attempt, decision, attempt_levers, created_lights, deleted_lights, real_light_state
+                    ),
+                }
             )
 
             # Pre-render grading-severity guardrail (2026-11-25, Eran's
@@ -582,6 +658,7 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                     "instead, grading should be a light-touch finishing pass, not the primary "
                     "dramatic mechanism."
                 )
+                attempt_history.append({"role": "user", "content": [{"type": "input_text", "text": feedback}]})
                 if attempt == MAX_ATTEMPTS:
                     _log_guardrail_rejection(
                         task, attempt, "grading_severity", {"severity": severity}, case_name, run_started_at,
@@ -615,6 +692,7 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                     "can't serve this mood, create_light/create_light_near a NEW light exactly where "
                     "the mood needs one instead of only retuning what's already there."
                 )
+                attempt_history.append({"role": "user", "content": [{"type": "input_text", "text": feedback}]})
                 if attempt == MAX_ATTEMPTS:
                     _log_guardrail_rejection(
                         task, attempt, "no_transform_change", {}, case_name, run_started_at,
@@ -651,6 +729,7 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                     "again, then re-apply the mood more moderately — commit to the mood through "
                     "color/contrast/shadow shape, not by erasing the image."
                 )
+                attempt_history.append({"role": "user", "content": [{"type": "input_text", "text": feedback}]})
                 if attempt == MAX_ATTEMPTS:
                     _log_guardrail_rejection(
                         task, attempt, "visibility",
@@ -709,6 +788,7 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                             "range much further (near-off, not just dimmer) so large areas of the frame are "
                             "genuinely near-black, not just dimmer than your key light."
                         )
+                    attempt_history.append({"role": "user", "content": [{"type": "input_text", "text": feedback}]})
                     if attempt == MAX_ATTEMPTS:
                         _log_guardrail_rejection(
                             task, attempt, "contrast",
@@ -760,6 +840,7 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                             "baseline in its own pool, and check whether global grading (post_exposure/"
                             "contrast/vignette) is eating the gain the light created."
                         )
+                        attempt_history.append({"role": "user", "content": [{"type": "input_text", "text": feedback}]})
                         if attempt == MAX_ATTEMPTS:
                             _log_guardrail_rejection(
                                 task, attempt, "key_light_p90_lift",
@@ -777,7 +858,7 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                         continue  # skip the judge entirely, retry without burning that call
 
             passed, judgement = await judge_mood_match(task, image_path=post_attempt_capture.path)
-            feedback = ""  # guardrail message (if any) consumed by this attempt, clear it
+            scores_this_run.append(judgement.mood_match_score)
 
             print(
                 f"[attempt {attempt}/{MAX_ATTEMPTS}] agent archetype={decision.mood_breakdown.strategy_archetype.value} "
@@ -794,12 +875,18 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                 print(f"[screenshot] result saved: {post_attempt_capture.path} (+ latest/)")
                 return f"Success on attempt {attempt}: {judgement.reasoning}"
 
+            # Real user turn (2026-11-26, Eran's call), paired with this
+            # attempt's assistant turn already appended above — the judge's
+            # actual score+reasoning, not a flattened recap string.
             attempt_history.append(
                 {
-                    "attempt": attempt,
-                    "action": decision.changes_summary,
-                    "score": judgement.mood_match_score,
-                    "notes": judgement.reasoning,
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": f"JUDGE FEEDBACK:\nScore: {judgement.mood_match_score}/10\n{judgement.reasoning}",
+                        }
+                    ],
                 }
             )
             if attempt == MAX_ATTEMPTS:

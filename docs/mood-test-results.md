@@ -1986,3 +1986,49 @@ that was silently 10x too small for this specific scene's real render
 math this entire project's history, and no "well-lit" result ever
 proved otherwise because ambient (unrelated to this bug) was carrying
 almost all of the visible brightness in every prior "good" scene.
+
+## 2026-11-26 (cont'd): real conversation history for the retry loop, not a flattened recap
+
+Eran raised that the judge itself is correctly stateless (fresh call
+every attempt, no memory of its own past verdicts — deliberately kept
+that way, a stateful judge risks anchoring/grade-inflating toward its
+own past opinion rather than judging the actual frame), but the
+LIGHTING AGENT's own retry loop had no real continuity either — just a
+flattened text recap rebuilt from scratch each attempt
+(`changes_summary` + judge reasoning pasted as prose), missing the one
+thing that actually matters for its own self-consistency:
+`light_role_assignments`, its own per-light KEY/FILL/RIM/PRACTICAL
+claims, was never fed back at all.
+
+Replaced it with real alternating conversation turns in
+`attempt_history` (assistant: the agent's own decision; user: the
+feedback that followed), instead of one re-flattened string. Each
+assistant turn (`_serialize_decision()`) is a hybrid of prose (narrative
+judgment — `reasoning`, `changes_summary`, nothing structural to
+represent) and small JSON blocks (where precision matters and
+paraphrasing would lose it): the agent's role-assignment CLAIMS, the
+VERIFIED lever diff (never `decision.lever_accounting`'s self-report,
+same principle already applied elsewhere), and — the key addition —
+the REAL light state after the attempt (`get_light_properties`, not
+self-report), placed right next to the role claims so a future attempt
+can literally see "I called light X my KEY" beside "light X's real
+intensity was Y", closing the claim-vs-reality gap the whole
+`light_role_assignments` field exists to expose.
+
+Decided NOT to give the judge this same treatment — a stateful judge
+would be tempted to bump a score just because the agent "tried to
+improve," independent of whether the new frame actually deserves it.
+The judge stays fresh and independent every call; only the lighting
+agent gets real continuity.
+
+Verified live: ran end-to-end with no errors. Noticed a good
+qualitative sign in the SAME run — the agent's own role claims evolved
+coherently turn to turn (the two original fixtures went fill → practical
+→ unused_this_attempt as it kept concentrating real lighting work into
+its own newly-created lights), consistent with it actually tracking its
+own prior claims now instead of re-deriving them from scratch each
+attempt. Final frame legible and consistent with recent quality (chair/
+bed/arcade cabinet clearly visible, real cold falloff) — this change is
+a mechanism improvement, not itself a mood-quality fix, so no dramatic
+score jump expected from it alone; the main.py docstring's description
+of the retry loop was updated to match.
