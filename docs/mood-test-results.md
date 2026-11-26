@@ -1816,3 +1816,65 @@ grading-severity guardrail rejected anyway (4.44 vs floor 3.9). The
 severity formula likely overcounts intentional full desaturation as
 crush risk the same way it counts blown-out exposure — those aren't
 the same failure mode. Next session.
+
+## 2026-11-26 (cont'd): RGB-only lighting, quick fixes, judge persona
+
+**Went RGB-only for all light tinting.** Decision: drop
+`color_temperature` from the agent's instructions and tool docstring
+entirely, instead of warning it not to stack color+temperature.
+Rationale: Kelvin can only move along the real blackbody curve
+(orange->white->blue), structurally cannot produce green/purple/cyan,
+which this eval suite needs (horror, post_apocalyptic, eerie_lab). RGB
+is a strict superset of what Kelvin can do. Removes the double-cooling
+bug class structurally rather than relying on instruction discipline.
+`color_temperature` stays in `unity_bridge.py`'s API for manual use.
+
+**Two quick fixes:**
+- `capture_scene_baseline`/`restore_scene_baseline` now also track
+  `shadow_strength` and `use_color_temperature` (new fields from the
+  Phase 0+1 pass, were invisible to restore — an attempt that darkened
+  shadows would never get reset back).
+- `_grading_severity` no longer penalizes negative saturation.
+  URP's saturation is luma-preserving (lerps toward grayscale, doesn't
+  scale luminance) — confirmed by the exact noir case above, which
+  measured severity=4.44 with the saturation term alone contributing
+  2.0 of that. Only over-saturation (positive values, real clipping
+  risk) counts now. Verified: same noir snapshot now computes to 2.44.
+
+**Judge persona (the big one).** Found via Eran directly questioning a
+passing result: the horror attempt that scored 6/10 PASS had judge
+reasoning that read like a fail — "extremely dark overall... mostly
+reads as a dim wash... shadow separation is weak because most of the
+frame collapses into near-black... not especially cinematic." Score
+and reasoning were disconnected, a real judge bug.
+
+Fixed by giving `judge_agent` a persona: an elite AAA video game
+lighting producer/cinematographer with zero patience for lazy
+fake-drama tricks (turning everything down and calling it horror,
+crushing to black and calling it noir). Added an explicit failure-mode
+callout: small self-illuminating props (monitor glow, arcade screen,
+ceiling panel emissive surface) are NOT the same as the room being lit
+— if the floor/walls around them stay near-pure black, that's
+underexposed, not atmospheric pooling, and "a few bright dots and
+nothing else" is a clear fail well below 6, not borderline. Made
+score-must-follow-reasoning an explicit rule.
+
+Verified by re-judging the EXACT SAME saved frame that previously
+passed at 6/10: same image, near-identical reasoning text, new score
+4/10 FAIL. Proves the bug was in scoring logic, not something
+ambiguous about the image. Re-ran horror live end-to-end: both real
+attempts now honestly fail at 4/10 (attempt 3 hit the existing
+transform-mandate guardrail before reaching the judge, a known
+separate tension, not new).
+
+**Honest framing going forward:** this is a strictly harder bar. The
+eval pass rate will likely look worse on the next full suite run —
+that's the judge telling the truth, not a regression. Several of the
+suite's historical 6/10-7/10 passes (recorded earlier in this file,
+pre-persona) are now suspect and should be treated as unverified until
+re-judged under the new persona. The real work ahead: the lighting
+agent still isn't producing a genuine directional key light that
+shapes the room — it's dimming/cooling things uniformly, not lighting
+them dramatically. Next session: re-run the full 10-case eval suite
+under the new judge to get an honest current baseline before any more
+tuning.
