@@ -570,6 +570,35 @@ def real_to_nice_intensity(real: float) -> float:
     return real / LIGHT_INTENSITY_REAL_PER_NICE
 
 
+def _is_falloff_light(target: str) -> bool:
+    """True for Point/Spot (real inverse-square falloff at in-scene
+    distances, what LIGHT_INTENSITY_REAL_PER_NICE was actually calibrated
+    against) — False for Directional and anything else, which should NOT
+    get the nice<->real conversion (see set_light_properties/
+    get_light_properties' own comments for why this matters live)."""
+    result = subprocess.run(
+        [
+            UNITY_EXE,
+            "command",
+            "component get_fields",
+            "--target",
+            str(target),
+            "--component",
+            "Light",
+            "--detail",
+            "value",
+            "--project-path",
+            PROJECT_PATH,
+            "--result-only",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    raw = json.loads(result.stdout)
+    return raw.get("m_Type") in ("Point", "Spot")
+
+
 
 class LightProperties(BaseModel):
     """Current/target values for a Light component's mood-relevant fields."""
@@ -616,8 +645,20 @@ def get_light_properties(target: str) -> LightProperties:
     shadows = raw.get("m_Shadows") or {}
     shadow_type_raw = shadows.get("m_Type")
     shadow_type = _SHADOW_TYPE_DISPLAY_TO_NAME.get(shadow_type_raw, shadow_type_raw) if shadow_type_raw else None
+    # Only Point/Spot get the nice<->real conversion (2026-11-26, caught
+    # before damage, see LIGHT_INTENSITY_REAL_PER_NICE's own comment) —
+    # that multiplier was calibrated specifically against Point/Spot
+    # falloff at Mess Hall-scale indoor distances. Confirmed live this
+    # does NOT generalize: Directional lights have no inverse-square
+    # falloff at all (parallel rays, distance-independent), and the
+    # Forest scene's sun already works fine at its native raw value
+    # (real=2.8 alone gives a normal, well-exposed outdoor scene) —
+    # applying the x10 conversion there would've made the agent see a
+    # falsely tiny number and push the sun toward blowout chasing drama.
+    is_falloff_light = raw.get("m_Type") in ("Point", "Spot")
+    raw_intensity = raw.get("m_Intensity")
     return LightProperties(
-        intensity=real_to_nice_intensity(raw["m_Intensity"]) if raw.get("m_Intensity") is not None else None,
+        intensity=(real_to_nice_intensity(raw_intensity) if is_falloff_light else raw_intensity) if raw_intensity is not None else None,
         color_r=color.get("r"),
         color_g=color.get("g"),
         color_b=color.get("b"),
@@ -657,7 +698,12 @@ def set_light_properties(
     alone can't express."""
     calls: list[tuple[str, object]] = []
     if intensity is not None:
-        calls.append(("m_Intensity", nice_to_real_intensity(intensity)))
+        # Only Point/Spot get the nice<->real conversion — see
+        # get_light_properties' matching comment. One extra cheap read
+        # to check type before deciding; Directional (and anything else)
+        # passes the nice value straight through as real, unconverted.
+        real_intensity = nice_to_real_intensity(intensity) if _is_falloff_light(target) else intensity
+        calls.append(("m_Intensity", real_intensity))
     if color is not None:
         calls.append(("m_Color", {"r": color[0], "g": color[1], "b": color[2], "a": 1.0}))
     if color_temperature is not None:
