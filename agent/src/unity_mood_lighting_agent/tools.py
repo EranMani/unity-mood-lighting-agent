@@ -212,12 +212,13 @@ def set_light_properties(
     range: float | None = None,
     spot_angle: float | None = None,
     shadow_type: str | None = None,
+    shadow_strength: float | None = None,
 ) -> str:
     """Set a Light's intensity, color (RGB, each 0-1, give all 3 together),
     color temperature in Kelvin (lower=warmer, e.g. 1800=candle, 6500=cool
-    daylight), bounce/indirect intensity, range, spot_angle, and/or
-    shadow_type. Omit any field to leave it unchanged. target is the
-    instance_id from the scene context.
+    daylight), bounce/indirect intensity, range, spot_angle, shadow_type,
+    and/or shadow_strength. Omit any field to leave it unchanged. target is
+    the instance_id from the scene context.
 
     range (Point/Spot only, world-space units the light reaches) is the
     lever that controls whether a light reads as a TIGHT CONTAINED POOL
@@ -235,7 +236,14 @@ def set_light_properties(
     'none' on a light you want to cast real shadow shape, set it
     explicitly — no amount of intensity or range alone produces a visible
     shadow if shadow_type is 'none', that is a hard requirement, not a
-    style choice."""
+    style choice.
+
+    shadow_strength (0-1) is a SEPARATE lever from shadow_type — it's how
+    DARK the shadow actually renders (0=invisible, 1=full black), not
+    whether a shadow exists at all. This is what actually separates a
+    soft_ambient mood (shadows present but barely registering, e.g.
+    0.2-0.4) from a noir mood (full-strength, near-black shadows, e.g.
+    0.9-1.0) — shadow_type alone can't express that difference."""
     color = None
     if color_r is not None or color_g is not None or color_b is not None:
         if color_r is None or color_g is None or color_b is None:
@@ -262,6 +270,8 @@ def set_light_properties(
         return f"Rejected: spot_angle {spot_angle} is out of Unity's valid range [1, 179] degrees."
     if shadow_type is not None and shadow_type not in ("none", "hard", "soft"):
         return f"Rejected: shadow_type must be 'none', 'hard', or 'soft', got {shadow_type!r}."
+    if shadow_strength is not None and not (0 <= shadow_strength <= 1):
+        return f"Rejected: shadow_strength {shadow_strength} must be in [0, 1]."
 
     _set_light_properties(
         target=target,
@@ -272,6 +282,7 @@ def set_light_properties(
         range=range,
         spot_angle=spot_angle,
         shadow_type=shadow_type,
+        shadow_strength=shadow_strength,
     )
     current = get_light_properties(target)
     return f"Updated light {target}: {current}"
@@ -497,14 +508,34 @@ def list_skyboxes() -> str:
 
 
 @function_tool
-def set_skybox(skybox_id: str, exposure: float = 1.0, rotation: float = 0.0) -> str:
+def set_skybox(
+    skybox_id: str,
+    exposure: float = 1.0,
+    rotation: float = 0.0,
+    tint_r: float | None = None,
+    tint_g: float | None = None,
+    tint_b: float | None = None,
+) -> str:
     """Swap the scene's skybox to one of list_skyboxes()'s ids. exposure
     (default 1.0) scales overall sky brightness — lower for a darker,
     more oppressive mood; rotation (0-360 degrees) spins the HDRI,
     useful for moving a bright spot out of a bad position. This changes
     indoor ambient light color/intensity too (this scene's ambient mode
-    is Skybox-driven), not just a visible backdrop."""
-    return _set_skybox(skybox_id=skybox_id, exposure=exposure, rotation=rotation)
+    is Skybox-driven), not just a visible backdrop.
+
+    tint_r/tint_g/tint_b (each 0-1, give all three together, default
+    neutral 0.5 each if omitted — 0.5 is the shader's NEUTRAL midpoint,
+    NOT 0 or 1) color-shifts the whole sky AND the indoor ambient light
+    it drives, on top of whichever HDRI is chosen — a real, nearly-free
+    extra color lever: push toward red for an ominous/bloody sky, green
+    for toxic/alien, etc., without needing a different HDRI at all."""
+    if tint_r is not None or tint_g is not None or tint_b is not None:
+        if tint_r is None or tint_g is None or tint_b is None:
+            return "Error: give all three of tint_r, tint_g, tint_b together, not just some."
+        tint = (tint_r, tint_g, tint_b)
+    else:
+        tint = None
+    return _set_skybox(skybox_id=skybox_id, exposure=exposure, rotation=rotation, tint=tint)
 
 
 @function_tool

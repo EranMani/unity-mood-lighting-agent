@@ -539,6 +539,8 @@ class LightProperties(BaseModel):
     range: float | None = Field(default=None, description="World-space units the light reaches (Point/Spot only) — small = a tight contained pool, large = floods the whole room evenly. Compare against get_scene_bounds()'s diagonal, not a fixed number.")
     spot_angle: float | None = Field(default=None, description="Degrees, full cone width (Spot only) — narrow = a tight dramatic beam, wide = a broad soft wash.")
     shadow_type: str | None = Field(default=None, description="'none', 'hard', or 'soft' — whether this light casts a shadow at all. Lights created fresh default to 'none' (no shadow), which makes real directional shadow shape impossible regardless of intensity/range.")
+    shadow_strength: float | None = Field(default=None, description="0-1 — how dark the shadow actually renders (0=invisible, 1=full black), independent of shadow_type.")
+    use_color_temperature: bool | None = Field(default=None, description="Whether color_temperature actually affects this light's rendered color at all — if False, color_temperature is a silent no-op and only the color (RGB) field is visible. set_light_properties always forces this True whenever color_temperature is given.")
 
 
 def get_light_properties(target: str) -> LightProperties:
@@ -580,6 +582,8 @@ def get_light_properties(target: str) -> LightProperties:
         range=raw.get("m_Range"),
         spot_angle=raw.get("m_SpotAngle"),
         shadow_type=shadow_type,
+        shadow_strength=shadows.get("m_Strength"),
+        use_color_temperature=raw.get("m_UseColorTemperature"),
     )
 
 
@@ -592,14 +596,21 @@ def set_light_properties(
     range: float | None = None,
     spot_angle: float | None = None,
     shadow_type: str | None = None,
+    shadow_strength: float | None = None,
 ) -> None:
     """Set a Light component's mood-relevant fields by instance_id. Omit a
     field to leave it unchanged. color is (r, g, b), each 0-1.
-    color_temperature is Kelvin and only visibly applies while
-    m_UseColorTemperature is true (true by default on this scene's light —
-    not managed here, see docs if that ever needs toggling). range is
-    world-space units (Point/Spot only). spot_angle is degrees, full cone
-    width (Spot only). shadow_type is 'none'/'hard'/'soft'."""
+    color_temperature is Kelvin — ALWAYS forces m_UseColorTemperature=true
+    in the same call (confirmed live 2026-11-26: Unity's own Light default
+    is false, meaning color_temperature was previously a silent no-op on
+    both this scene's original lights the whole time; do not revert this
+    without re-confirming). range is world-space units (Point/Spot only).
+    spot_angle is degrees, full cone width (Spot only). shadow_type is
+    'none'/'hard'/'soft'. shadow_strength is 0-1 — how dark the shadow
+    actually renders (0=invisible, 1=full black), independent of
+    shadow_type; lets soft_ambient (shadows barely registering) and noir
+    (full-strength near-black shadows) actually differ, which shadow_type
+    alone can't express."""
     calls: list[tuple[str, object]] = []
     if intensity is not None:
         calls.append(("m_Intensity", intensity))
@@ -607,6 +618,7 @@ def set_light_properties(
         calls.append(("m_Color", {"r": color[0], "g": color[1], "b": color[2], "a": 1.0}))
     if color_temperature is not None:
         calls.append(("m_ColorTemperature", color_temperature))
+        calls.append(("m_UseColorTemperature", True))
     if bounce_intensity is not None:
         calls.append(("m_BounceIntensity", bounce_intensity))
     if range is not None:
@@ -615,6 +627,8 @@ def set_light_properties(
         calls.append(("m_SpotAngle", spot_angle))
     if shadow_type is not None:
         calls.append(("m_Shadows.m_Type", _SHADOW_TYPE_NAME_TO_INT[shadow_type]))
+    if shadow_strength is not None:
+        calls.append(("m_Shadows.m_Strength", shadow_strength))
 
     for field, value in calls:
         subprocess.run(
@@ -746,6 +760,34 @@ def create_light(
             "m_Shadows.m_Type",
             "--value",
             str(_SHADOW_TYPE_NAME_TO_INT["soft"]),
+            "--project-path",
+            PROJECT_PATH,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    # Confirmed live (2026-11-26): Unity's own Light component default is
+    # m_UseColorTemperature=false, meaning set_light_properties'
+    # color_temperature param is a SILENT NO-OP on any light where this
+    # isn't explicitly forced true — confirmed on this scene's ORIGINAL 2
+    # lights too, every color_temperature value this project has ever set
+    # (across this entire project's history) rendered through m_Color
+    # alone. Forcing it true on every new light so this doesn't repeat.
+    subprocess.run(
+        [
+            UNITY_EXE,
+            "command",
+            "component set_field",
+            "--target",
+            instance_id,
+            "--component",
+            "Light",
+            "--field",
+            "m_UseColorTemperature",
+            "--value",
+            "true",
             "--project-path",
             PROJECT_PATH,
         ],
@@ -1226,27 +1268,36 @@ def list_available_skyboxes() -> list[SkyboxOption]:
     return [SkyboxOption(**entry) for entry in raw]
 
 
-def set_skybox(skybox_id: str, exposure: float = 1.0, rotation: float = 0.0) -> str:
+def set_skybox(skybox_id: str, exposure: float = 1.0, rotation: float = 0.0, tint: tuple[float, float, float] | None = None) -> str:
     """Swap the scene's skybox to one of the HDRIs listed by
     list_available_skyboxes(), by id. exposure (default 1.0, Unity's own
     neutral default) scales overall sky brightness; rotation (0-360
     degrees) spins the HDRI around the vertical axis, useful for moving
-    a sun/bright spot out of a bad position. Uses Unity's built-in
-    Skybox/Panoramic shader (pipeline-agnostic — URP's DrawSkyboxPass
-    just renders whatever RenderSettings.skybox points at, confirmed
-    live against this project's URP shader property list: _MainTex,
-    _Mapping, _ImageType, _Exposure, _Rotation, _Tint). Mapping is fixed
-    to Latitude-Longitude (equirectangular) since that's the format every
-    polyhaven.com HDRI download uses — confirmed live, not guessed.
-    Creates one real .mat asset per skybox under Assets/HDRIs/Materials/
-    (reused on repeat calls, not recreated). Calls
-    DynamicGI.UpdateEnvironment() so ambient light/reflections pick up
-    the change immediately, not just the visible dome."""
+    a sun/bright spot out of a bad position. tint (r, g, b, each 0-1,
+    default neutral (0.5, 0.5, 0.5) — Unity's Skybox/Panoramic shader
+    multiplies _Tint by 2 internally, so 0.5 is the no-op midpoint, not
+    0 or 1) color-shifts the whole sky AND, since ambient is
+    skybox-driven, the scene's indoor ambient light too — a real,
+    nearly-free color lever on top of whichever HDRI is chosen (red for
+    an ominous sky, green for toxic/alien, etc. — confirmed 2026-11-26,
+    this was previously a hardcoded dead parameter on the exact same
+    shader already in use). Uses Unity's built-in Skybox/Panoramic shader
+    (pipeline-agnostic — URP's DrawSkyboxPass just renders whatever
+    RenderSettings.skybox points at, confirmed live against this
+    project's URP shader property list: _MainTex, _Mapping, _ImageType,
+    _Exposure, _Rotation, _Tint). Mapping is fixed to Latitude-Longitude
+    (equirectangular) since that's the format every polyhaven.com HDRI
+    download uses — confirmed live, not guessed. Creates one real .mat
+    asset per skybox under Assets/HDRIs/Materials/ (reused on repeat
+    calls, not recreated). Calls DynamicGI.UpdateEnvironment() so ambient
+    light/reflections pick up the change immediately, not just the
+    visible dome."""
     options = {opt.id: opt for opt in list_available_skyboxes()}
     if skybox_id not in options:
         valid = ", ".join(sorted(options))
         return f"Error: unknown skybox_id '{skybox_id}'. Valid ids: {valid}"
     filename = options[skybox_id].filename
+    tint_r, tint_g, tint_b = tint if tint is not None else (0.5, 0.5, 0.5)
 
     script = f"""
 var texPath = "Assets/HDRIs/{filename}";
@@ -1269,7 +1320,7 @@ mat.SetFloat("_Mapping", 1f);
 mat.SetFloat("_ImageType", 0f);
 mat.SetFloat("_Exposure", {exposure}f);
 mat.SetFloat("_Rotation", {rotation}f);
-mat.SetColor("_Tint", new UnityEngine.Color(0.5f, 0.5f, 0.5f, 0.5f));
+mat.SetColor("_Tint", new UnityEngine.Color({tint_r}f, {tint_g}f, {tint_b}f, 0.5f));
 UnityEditor.EditorUtility.SetDirty(mat);
 UnityEngine.RenderSettings.skybox = mat;
 UnityEngine.DynamicGI.UpdateEnvironment();
@@ -1286,7 +1337,7 @@ return new {{ ok = true, material_path = matPath }};
     data = json.loads(result.stdout)
     if not data.get("ok"):
         return f"Error: {data.get('error', 'unknown failure setting skybox')}"
-    return f"Skybox set to '{skybox_id}' ({options[skybox_id].display_name}), exposure={exposure}, rotation={rotation}."
+    return f"Skybox set to '{skybox_id}' ({options[skybox_id].display_name}), exposure={exposure}, rotation={rotation}, tint=({tint_r}, {tint_g}, {tint_b})."
 
 
 # --- Scene selection ----------------------------------------------------
@@ -1461,6 +1512,30 @@ if (vol == null) {
 }
 report["volume_created"] = volumeCreated;
 
+// 1b. Tonemapping override — confirmed live 2026-11-26: this project's
+// Volume profile had NO Tonemapping override at all, meaning URP falls
+// back to "None" mode (no filmic curve at all) instead of any tonemap
+// pass. A/B tested live on the real clean baseline: None (mean=83.4,
+// p90=97.0) and Neutral (mean=84.8, p90=98.0) are nearly identical —
+// Neutral adds gentle highlight handling with no real shadow cost.
+// ACES (mean=52.9, p90=66.0) measured MEANINGFULLY darker — its
+// characteristic filmic shadow-crushing toe. Given this project's
+// single most recurring problem across its entire history has been
+// scenes accidentally crushing to black, deliberately picking the
+// MORE shadow-crushing tonemapper would work directly against that —
+// Neutral chosen instead, not ACES, specifically for this reason.
+UnityEngine.Rendering.Universal.Tonemapping tonemapping;
+bool tonemappingExists = vol.profile.TryGet<UnityEngine.Rendering.Universal.Tonemapping>(out tonemapping);
+bool tonemappingAdded = false;
+if (!tonemappingExists) {
+    tonemapping = vol.profile.Add<UnityEngine.Rendering.Universal.Tonemapping>(true);
+    tonemapping.mode.overrideState = true;
+    tonemapping.mode.value = UnityEngine.Rendering.Universal.TonemappingMode.Neutral;
+    tonemappingAdded = true;
+}
+report["tonemapping_added"] = tonemappingAdded;
+report["tonemapping_mode"] = tonemapping.mode.value.ToString();
+
 // 2. Every light -> Realtime mode.
 var lights = UnityEngine.Object.FindObjectsByType<UnityEngine.Light>(UnityEngine.FindObjectsSortMode.None);
 int lightsFixed = 0;
@@ -1501,8 +1576,15 @@ def ensure_scene_ready(scene_path: str | None = None) -> dict:
     visible in real time (see docs/unity-lighting-rendering-concepts.md):
     calls capture_scene_baseline() FIRST (guarantees the real original is
     saved before anything below touches it), then creates a missing
-    Global Volume, forces every Light + ReflectionProbe to Realtime mode
-    (Baked/Mixed would silently freeze mood changes until a manual
+    Global Volume, adds a Neutral Tonemapping override if none exists
+    (confirmed live 2026-11-26: this project rendered with NO tonemapping
+    at all for its entire history; A/B tested None/Neutral/ACES on the
+    real clean baseline — ACES measured meaningfully darker from its
+    shadow-crushing filmic toe, the wrong direction for a project whose
+    single biggest recurring bug has been accidental crushing; Neutral
+    chosen instead, nearly identical to having none at all but with
+    gentle highlight handling), forces every Light + ReflectionProbe to
+    mode (Baked/Mixed would silently freeze mood changes until a manual
     rebake), and creates one baseline light if the scene has none at
     all. Deterministic, code-orchestrated — same tier as
     cleanup_agent_lights()/reset_post_processing(), called once at the

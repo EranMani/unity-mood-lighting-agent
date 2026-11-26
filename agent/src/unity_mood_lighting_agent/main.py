@@ -373,7 +373,8 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
     print(
         f"[scene] ready: {readiness['light_count']} light(s) ({readiness['lights_fixed']} set to Realtime), "
         f"{readiness['probe_count']} probe(s) ({readiness['probes_fixed']} set to Realtime), "
-        f"volume_created={readiness['volume_created']}, baseline_light_created={readiness['baseline_light_created']}"
+        f"volume_created={readiness['volume_created']}, baseline_light_created={readiness['baseline_light_created']}, "
+        f"tonemapping_added={readiness.get('tonemapping_added')}, tonemapping_mode={readiness.get('tonemapping_mode')}"
     )
 
     # Deterministic lever-usage tracking (2026-11-25, Eran's call): real

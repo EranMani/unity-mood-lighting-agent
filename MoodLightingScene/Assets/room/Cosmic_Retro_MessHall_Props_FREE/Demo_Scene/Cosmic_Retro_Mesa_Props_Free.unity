@@ -503,8 +503,8 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 507586010}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.25113654, y: -0.8319799, z: 0.33209917, w: 0.36667427}
-  m_LocalPosition: {x: -1.8000002, y: 2.83, z: 8.45}
+  m_LocalRotation: {x: 0.25101858, y: -0.83182144, z: 0.33249444, w: 0.3667564}
+  m_LocalPosition: {x: -1.2792959, y: 3.6360922, z: 7.8754816}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -559,7 +559,7 @@ Light:
     m_Type: 2
     m_Resolution: -1
     m_CustomResolution: -1
-    m_Strength: 1
+    m_Strength: 0.8
     m_Bias: 0.05
     m_NormalBias: 0.4
     m_NearPlane: 0.2
@@ -593,8 +593,8 @@ Light:
   m_LightShadowCasterMode: 0
   m_AreaSize: {x: 1, y: 1}
   m_BounceIntensity: 0
-  m_ColorTemperature: 16000
-  m_UseColorTemperature: 0
+  m_ColorTemperature: 6500
+  m_UseColorTemperature: 1
   m_BoundingSphereOverride: {x: 0, y: 0, z: 0, w: 0}
   m_UseBoundingSphereOverride: 0
   m_UseViewFrustumForShadowCasterCull: 1
@@ -712,8 +712,8 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1038847581}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.25113654, y: -0.8319799, z: 0.33209917, w: 0.36667427}
-  m_LocalPosition: {x: -1.283, y: 2.171, z: 6.401}
+  m_LocalRotation: {x: 0.25101858, y: -0.83182144, z: 0.33249444, w: 0.3667564}
+  m_LocalPosition: {x: -2.5292957, y: 3.4360924, z: 6.0754814}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -739,7 +739,7 @@ Light:
     m_Type: 2
     m_Resolution: -1
     m_CustomResolution: -1
-    m_Strength: 1
+    m_Strength: 0.85
     m_Bias: 0.05
     m_NormalBias: 0.4
     m_NearPlane: 0.2
@@ -772,9 +772,9 @@ Light:
   m_Lightmapping: 4
   m_LightShadowCasterMode: 0
   m_AreaSize: {x: 1, y: 1}
-  m_BounceIntensity: 0.02
-  m_ColorTemperature: 12000
-  m_UseColorTemperature: 0
+  m_BounceIntensity: 0
+  m_ColorTemperature: 6500
+  m_UseColorTemperature: 1
   m_BoundingSphereOverride: {x: 0, y: 0, z: 0, w: 0}
   m_UseBoundingSphereOverride: 0
   m_UseViewFrustumForShadowCasterCull: 1
