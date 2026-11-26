@@ -140,6 +140,7 @@ See `docs/project-organization.md` for why it's laid out this way.
 | [`docs/build-log.md`](docs/build-log.md) | Full chronological decision history - every bug found and fixed, every design discussion, in order |
 | [`docs/mood-test-results.md`](docs/mood-test-results.md) | Eval scoring data + the ongoing change-log (every tuning change, why, and its measured effect) |
 | [`docs/agent-output-quality-techniques.md`](docs/agent-output-quality-techniques.md) | Reasoning-first field order in structured output, and the `ModelSettings` reference |
+| [`docs/ai-agent-engineering-concepts.md`](docs/ai-agent-engineering-concepts.md) | Index of general AI-engineering principles this project hit (structured output as forcing function, verified vs. self-reported state, judge statefulness, etc.) — the concepts, not the chronology |
 | [`docs/llm-customization-options.md`](docs/llm-customization-options.md) | Tool vs. instructions vs. few-shot vs. fine-tuning - when to use what |
 | [`docs/unity-lighting-rendering-concepts.md`](docs/unity-lighting-rendering-concepts.md) | Unity lighting modes (Realtime/Baked/Mixed), probes, Static flag |
 | [`docs/unity-cli-connection.md`](docs/unity-cli-connection.md) | Unity CLI setup, connection, and common gotchas |
