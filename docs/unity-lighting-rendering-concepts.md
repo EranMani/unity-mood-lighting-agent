@@ -179,3 +179,72 @@ all for this. It writes its own `script eval` that assigns directly to
 of whatever parent an object has now or gains later — no manual
 composition, no dependency on the CLI's (undocumented-to-us) choice of
 local space.
+
+## Camera near-clip plane — the real root cause of "black rendering" (2026-11-26)
+
+**The single most expensive lesson this project has produced.** An
+entire multi-session saga ("horror/thriller keep ending in black or
+capped at 5/10") — the corrupted-baseline finding, the grading-
+compounding finding, the p90-vs-baseline guardrail, all real, all
+correctly fixed — turned out to be chasing symptoms downstream of a
+completely different, far more mundane bug: the scene's **Main
+Camera's near clipping plane was `0.01`**, and the camera happened to
+sit right at the room's geometry boundary (confirmed: its position
+exactly matched the scene's bounding-box max corner — i.e. right in
+the corner, likely touching or just inside a wall/ceiling mesh).
+
+**Why a TINY near-clip value causes BLACKNESS, not more visibility
+(counterintuitive, read twice):** the near clipping plane is "how
+close to the lens before Unity stops drawing it" — a small value means
+MORE gets drawn, not less. With the camera touching a wall and
+near=0.01, Unity faithfully rendered that wall's own interior/back
+face at a few centimeters' distance, filling the ENTIRE frame with an
+unlit surface. Visually indistinguishable from "the whole scene is
+black" — it isn't a crushed render, it's a wall a centimeter from the
+lens. Raising near-clip to ~12 made Unity ignore anything closer than
+that, clipping the wall out of the frustum and finally revealing the
+actual lit room behind the camera's near plane.
+
+**Why nothing about this project's lighting/grading/guardrail work
+could ever have caught it:**
+- Clipping happens at the geometry stage of the render pipeline,
+  strictly BEFORE the post-processing Volume stack runs. Disabling
+  every post-processing effect (grading, vignette, fog) changes
+  nothing, because none of it is reachable yet when a near-camera wall
+  is already filling the frame. Confirmed live by Eran — the decisive
+  clue that ruled out the entire grading/lighting investigation line.
+- Unity's Scene view (the Editor's own free-roam camera) does **not**
+  use a scene Camera *component's* clip planes or exposure settings at
+  all — it has its own independent preview camera. This is exactly why
+  Scene view looked properly lit the whole time while Game view (which
+  renders through the actual `Main Camera` GameObject) was black. A
+  "looks fine in Scene view" check is NOT a substitute for checking
+  Game view — they can disagree completely and both be internally
+  consistent.
+- None of this project's tools (`set_light_properties`,
+  `set_color_adjustments`, `set_vignette`, `set_fog`, `set_ambient`,
+  etc.) touch the Camera component at all — camera transform/clip
+  planes are completely out of scope for the agent, so no amount of
+  mood-tuning could ever have self-corrected this.
+
+**Red herring investigated along the way, for the record:** the Main
+Camera also has "Physical Camera" exposure fields serialized (ISO 200,
+f/16 aperture, 1/200s shutter — a bright-daylight exposure profile that
+would plausibly crush an indoor scene too, and also wouldn't be
+affected by toggling post-processing). This looked like a strong
+candidate and matched the symptom just as well on paper. It was NOT
+the actual fix — Physical Camera stayed checked ON in Eran's own
+before/after screenshots, and the real fix was the clip plane. Lesson:
+two independent explanations can both fit the same symptom; don't stop
+investigating once you find A plausible cause, verify the one you fix
+is actually the one that moves the needle.
+
+**Practical takeaway for this project going forward:** when a scene
+renders black/near-black and disabling post-processing doesn't change
+it, check (in this order, cheapest first): (1) Camera near/far clip
+planes vs. camera position relative to nearby geometry, (2) whether
+Physical Camera is on with implausible exposure values for the scene,
+(3) light bake mode (see "Lighting Mode" section above). Don't assume
+it's a lighting/grading calibration problem just because that's what
+the agent's own levers control — the camera itself is a real, silent
+failure point this product has never had a tool or guardrail for.
