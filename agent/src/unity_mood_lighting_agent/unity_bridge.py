@@ -1367,6 +1367,9 @@ foreach (var l in lights) {
         intensity = l.intensity,
         color_r = l.color.r, color_g = l.color.g, color_b = l.color.b,
         range = l.range,
+        spot_angle = l.spotAngle,
+        color_temperature = l.colorTemperature,
+        bounce_intensity = l.bounceIntensity,
         shadow_type_int = (int)l.shadows,
         pos_x = l.transform.position.x, pos_y = l.transform.position.y, pos_z = l.transform.position.z,
         rot_x = l.transform.eulerAngles.x, rot_y = l.transform.eulerAngles.y, rot_z = l.transform.eulerAngles.z
@@ -1566,6 +1569,21 @@ def restore_scene_baseline(scene_path: str | None = None) -> dict:
             if has_pos
             else ""  # old baseline predates position/rotation capture — leave untouched rather than guess (0,0,0) and risk teleporting into geometry
         )
+        spot_angle_restore = (
+            f'l.spotAngle = {light["spot_angle"]}f; '
+            if light.get("spot_angle") is not None
+            else ""  # old baseline predates spot_angle/color_temperature capture — leave untouched
+        )
+        color_temp_restore = (
+            f'l.colorTemperature = {light["color_temperature"]}f; '
+            if light.get("color_temperature") is not None
+            else ""
+        )
+        bounce_restore = (
+            f'l.bounceIntensity = {light["bounce_intensity"]}f; '
+            if light.get("bounce_intensity") is not None
+            else ""
+        )
         light_restores.append(
             f'foreach (var l in UnityEngine.Object.FindObjectsByType<UnityEngine.Light>(UnityEngine.FindObjectsSortMode.None)) {{ '
             f'if (l.gameObject.GetEntityId().ToString() == "{light["instance_id"]}" || l.gameObject.name == "{light["name"]}") {{ '
@@ -1574,6 +1592,9 @@ def restore_scene_baseline(scene_path: str | None = None) -> dict:
             f'l.color = new UnityEngine.Color({light["color_r"]}f, {light["color_g"]}f, {light["color_b"]}f); '
             f'l.range = {light["range"]}f; '
             f'l.shadows = (UnityEngine.LightShadows){light.get("shadow_type_int", 0)}; '
+            + spot_angle_restore
+            + color_temp_restore
+            + bounce_restore
             + pos_restore
             + 'break; } }'
         )

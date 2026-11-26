@@ -323,7 +323,7 @@ Camera:
   m_ShutterSpeed: 8.79
   m_Aperture: 10.32
   m_FocusDistance: 45.67
-  m_FocalLength: 50.364456
+  m_FocalLength: 30.531776
   m_BladeCount: 3
   m_Curvature: {x: 2, y: 11}
   m_BarrelClipping: 0.25
@@ -338,7 +338,7 @@ Camera:
     height: 1
   near clip plane: 10.9
   far clip plane: 1154.6
-  field of view: 21
+  field of view: 34
   orthographic: 0
   orthographic size: 5.54
   m_Depth: -1
@@ -733,7 +733,7 @@ Light:
   m_Intensity: 0.81
   m_Range: 1.77
   m_SpotAngle: 24
-  m_InnerSpotAngle: 21.80208
+  m_InnerSpotAngle: 18
   m_CookieSize2D: {x: 10, y: 10}
   m_Shadows:
     m_Type: 2
