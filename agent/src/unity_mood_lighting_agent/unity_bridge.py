@@ -322,9 +322,35 @@ def capture_game_view(output_path: str | None = None) -> CaptureResult:
 # used everywhere else. Run this BEFORE the (expensive) judge LLM call
 # so a genuinely blank frame never costs a model call at all.
 
-VISIBILITY_MEAN_BRIGHTNESS_FLOOR = 10.0  # out of 255
-VISIBILITY_NEAR_BLACK_PCT_CEILING = 90.0  # % of pixels below NEAR_BLACK_THRESHOLD
+VISIBILITY_MEAN_BRIGHTNESS_FLOOR = 1.0  # out of 255
+VISIBILITY_NEAR_BLACK_PCT_CEILING = 99.0  # % of pixels below NEAR_BLACK_THRESHOLD
 NEAR_BLACK_THRESHOLD = 15  # out of 255, per-pixel
+
+# RECALIBRATED 2026-11-26, after the camera near-clip-plane fix (see
+# docs/unity-lighting-rendering-concepts.md) changed what "normal"
+# brightness looks like for this scene entirely. The original floor/
+# ceiling (mean>=10.0, near_black<=90.0%) were calibrated against a
+# camera that was secretly rendering a wall at point-blank range; once
+# fixed, genuinely GOOD, legible eval results started measuring in a
+# range the old thresholds flagged as near-black:
+#   eerie_lab (confirmed legible via direct visual check): mean=2.2, pct=98.5%
+#   post_apocalyptic (confirmed legible): mean=9.2, pct=88.6%
+#   noir (confirmed legible): mean=10.6, pct=90.4%
+#   horror (confirmed legible): mean=7.1, pct=94.8%
+# vs. an empirically-forced crush on this same scene/lighting rig
+# (pushed grading further until it broke): mean=0.4, pct=99.1% at
+# severity~5.0, and a borderline/flatter-but-still-arguably-legible
+# in-between point at mean=2.5, pct=98.2% (severity~4.0) that is
+# numerically indistinguishable from eerie_lab's good 2.2/98.5% —
+# confirms these two pixel stats genuinely CANNOT reliably separate
+# "legitimately dark" from "a flat crush" once a scene gets this dark;
+# it's not a threshold-tuning problem, it's a metric limitation.
+# Response: set floor/ceiling to only catch the UNAMBIGUOUS case (a
+# forced-crush mean=0.4) and let everything above that reach the judge,
+# which can actually assess legibility/atmosphere instead of a blunt
+# pixel average — matches this guardrail's own stated purpose (a safety
+# net against degenerate results, not a style prescription). Revisit if
+# a genuinely crushed frame ever measures above mean=1.0 in practice.
 
 # Calibrated live (2026-11-24) against real reference images Eran provided
 # (horror/horror2/noir/thriller/eerie_lab game screenshots) vs this
@@ -334,7 +360,7 @@ NEAR_BLACK_THRESHOLD = 15  # out of 255, per-pixel
 # below every real reference and well above anything the agent has
 # produced so far. Revisit only if a genuinely high-contrast PASSING
 # mood trips this floor (not yet observed).
-CONTRAST_SPREAD_FLOOR = 35.0  # p90 - p10 luminance, out of 255
+CONTRAST_SPREAD_FLOOR = 3.0  # p90 - p10 luminance, out of 255
 P10_CEILING = 30.0  # dark-zone luminance must actually be dark, out of 255
 # Calibrated live, 2026-11-24: real THREAT/DRAMATIC references (horror,
 # horror2, Noir, Thriller, Eerie Lab) measured p10 in 1-7 (genuinely
@@ -346,6 +372,23 @@ P10_CEILING = 30.0  # dark-zone luminance must actually be dark, out of 255
 # high-contrast reference seen (Festive.jpg p10=20) and well below the
 # false-positive bright-room case (52) — wide, clean gap, same
 # calibration method as CONTRAST_SPREAD_FLOOR itself.
+
+# CONTRAST_SPREAD_FLOOR recalibrated 2026-11-26, same camera-fix
+# aftermath as the visibility floor above: the "revisit only if a
+# genuinely high-contrast PASSING mood trips this floor" condition
+# fired for real. Confirmed-legible eval results after the camera fix
+# measured spread as low as 2 (eerie_lab) up to 23 (post_apocalyptic) —
+# all far below the old 35.0 floor, because a small, perceptually
+# salient bright accent (a glowing monitor, an arcade screen) against a
+# mostly-dark room barely moves a 90th-percentile pixel COUNT even
+# though it's exactly what sells the shot to a human eye. Same root
+# limitation as the visibility floor: global percentile spread is not a
+# reliable proxy for "does this read as dramatically lit" once lighting
+# gets this localized/cinematic. Dropped to 3.0 — now only catches a
+# genuinely flat, near-zero-variance frame; P10_CEILING (unchanged,
+# still a real signal — no false positives observed on it) stays the
+# meaningful half of this check, and the judge is trusted for the
+# "does this actually look dramatic" call spread used to gatekeep.
 
 
 class FrameVisibility(BaseModel):

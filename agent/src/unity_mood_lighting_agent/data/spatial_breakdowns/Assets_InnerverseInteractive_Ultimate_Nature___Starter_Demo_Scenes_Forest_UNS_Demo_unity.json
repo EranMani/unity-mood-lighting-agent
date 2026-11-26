@@ -1,0 +1,45 @@
+{
+  "reasoning": "The scene reads as a long valley/corridor with a broad open center, dense tree masses framing both sides, and a few exposed rock/terrain features breaking up the floor. Good lighting anchors should spread across the valley: one on the left-side opening near the water/rocks, one centered in the main clearing, one on the right-side slope by the exposed stone, and one farther back where the valley narrows. I’m keeping anchors spaced apart and based on distinct geometric opportunities: open ground, edge-of-wall/tree line, and isolated rock clusters.",
+  "anchors": [
+    {
+      "anchor_object": "UNS_Terrain",
+      "anchor_name": "UNS_Terrain",
+      "traits": "Large surrounding terrain mass with a broad open floor area nearby; good place for a light to sit over open ground without immediately intersecting dense geometry.",
+      "suggested_light_position_x": -180.0,
+      "suggested_light_position_y": 14.0,
+      "suggested_light_position_z": -120.0
+    },
+    {
+      "anchor_object": "UNS_Systems",
+      "anchor_name": "UNS_Systems",
+      "traits": "Central scene hub relative to the whole layout; the widest open clearing is around it, making it suitable for a general fill light placed above the main open span.",
+      "suggested_light_position_x": 0.0,
+      "suggested_light_position_y": 18.0,
+      "suggested_light_position_z": 40.0
+    },
+    {
+      "anchor_object": "UNS_Terrain",
+      "anchor_name": "UNS_Terrain",
+      "traits": "Right-side edge zone with rocky wall-like forms and a narrower pocket of space; suitable for a side-positioned light near the cliff line.",
+      "suggested_light_position_x": 220.0,
+      "suggested_light_position_y": 16.0,
+      "suggested_light_position_z": -30.0
+    },
+    {
+      "anchor_object": "UNS_Terrain",
+      "anchor_name": "UNS_Terrain",
+      "traits": "Left-mid valley margin with water/rock shapes and some open air above the slope; a light can sit just off the denser foliage line here.",
+      "suggested_light_position_x": -260.0,
+      "suggested_light_position_y": 13.0,
+      "suggested_light_position_z": 90.0
+    },
+    {
+      "anchor_object": "UNS_Terrain",
+      "anchor_name": "UNS_Terrain",
+      "traits": "Farther-back narrowing section of the valley where the tree lines converge; open vertical space but constrained horizontal clearance, good for a distant accent placed high enough to avoid the canopy.",
+      "suggested_light_position_x": 40.0,
+      "suggested_light_position_y": 19.0,
+      "suggested_light_position_z": 260.0
+    }
+  ]
+}

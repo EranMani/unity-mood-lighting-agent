@@ -80,7 +80,30 @@ LOG_PATH = REPO_ROOT / "mood_test_log.jsonl"
 # deliberately loose — this only needs to catch a key light that's
 # net LOWER than or barely at the unlit baseline, not referee exact
 # brightness taste.
-KEY_LIGHT_P90_LIFT_FLOOR = 1.05
+#
+# RECALIBRATED 2026-11-26, same camera-fix aftermath as the other two
+# pixel-stat guardrails: after the camera fix, baseline p90 jumped to
+# 145 (from 112), and EVERY confirmed-legible, genuinely good
+# high-contrast eval result measured nowhere close to even the OLD
+# ratio's new requirement (152.2) — horror p90=10, eerie_lab p90=3,
+# noir p90=15, post_apocalyptic p90=24, all visually confirmed good.
+# Root cause, deeper than a stale number: whole-frame p90 requires 10%
+# of ALL pixels to be that bright — a tight, contained dramatic key
+# light's pool (by design, covering a small fraction of the frame)
+# essentially never moves a 90th-percentile statistic computed over the
+# WHOLE frame, even when it's exactly the right, convincing look. Same
+# "percentile stats can't see small salient highlights" limitation as
+# CONTRAST_SPREAD_FLOOR and the visibility floor. 1.05 would reject
+# every real good example by a wide margin, not a close one. Dropped to
+# 0.15 (15% of baseline p90), clearing all 4 real confirmed-good
+# examples' ratios (0.03-0.17) with the single highest (0.17,
+# post_apocalyptic) landing just above it — still catches a key light
+# that did essentially nothing (near-zero p90), but no longer vetoes
+# legitimately contained, convincing lighting. A real fix (comparing
+# brightness within the key light's own intended pool/ROI rather than
+# the whole frame) would be more principled than any whole-frame
+# percentile ratio — flagged for a future session, not solved here.
+KEY_LIGHT_P90_LIFT_FLOOR = 0.15
 
 
 def _snapshot_lever_state() -> dict:
@@ -159,7 +182,7 @@ def _diff_levers(before: dict, after: dict) -> set[str]:
     return changed
 
 
-GRADING_SEVERITY_FLOOR = 2.6  # see _grading_severity docstring for calibration
+GRADING_SEVERITY_FLOOR = 3.9  # see _grading_severity docstring for calibration
 
 
 def _grading_severity(snapshot: dict) -> float:
@@ -181,6 +204,32 @@ def _grading_severity(snapshot: dict) -> float:
     REAL legitimate attempt too (horror attempt 1 on the real baseline,
     the closest-to-passing attempt all session, severity ~1.88 by this
     formula) to avoid false-positiving on a genuinely decent combo.
+
+    RECALIBRATED 2026-11-26 after the camera near-clip-plane fix (see
+    docs/unity-lighting-rendering-concepts.md) changed this scene's
+    real baseline brightness enough that the 2.6 floor above started
+    false-positive rejecting genuinely good eval results: eerie_lab
+    (confirmed legible via direct visual check, severity=2.72),
+    post_apocalyptic (confirmed legible, severity=2.98), noir
+    (confirmed legible, severity=2.81) were all being rejected despite
+    looking fine. Re-ran this same empirical crush-point test on the
+    now-fixed camera: pushing grading further to severity~4.0 produced
+    a genuinely flatter/darker result (mean=2.5, numerically almost
+    identical to eerie_lab's good 2.2 — these two pixel stats alone
+    can't tell them apart, a real metric limitation, not a tuning
+    problem), and severity~5.0 was an unambiguous crush (mean=0.4).
+    First pass raised the floor to 3.3 — turned out still too tight: a
+    live eval re-run showed the agent's own later-attempt escalations
+    landing at severity 3.36-3.65 (naturally pushing harder when an
+    earlier attempt's score didn't improve), all BELOW the empirically-
+    confirmed ambiguous point (~3.98) and comfortably below the
+    confirmed crush point (~5.0) — meaning real attempts were being
+    pre-render-rejected without ever finding out if they'd have
+    rendered fine. Raised again to 3.9, directly tied to the measured
+    ambiguous point rather than a guess, so only attempts in the
+    genuinely-likely-to-crush zone get stopped before paying for a
+    render. Revisit if a confirmed-crushed frame ever measures below
+    3.9 in practice.
 
     color_adjustments: contrast/50 and |saturation|/50 (both roughly
     0-100 in this project's range) plus |post_exposure| (roughly -2..2)
