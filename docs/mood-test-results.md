@@ -2032,3 +2032,76 @@ bed/arcade cabinet clearly visible, real cold falloff) — this change is
 a mechanism improvement, not itself a mood-quality fix, so no dramatic
 score jump expected from it alone; the main.py docstring's description
 of the retry loop was updated to match.
+
+## 2026-11-26 (cont'd again): full 10-case eval suite, after all of this session's fixes together
+
+Before this, caught and fixed a third bug the suite itself would have
+silently eaten: the Forest scene's only light is Directional (a sun),
+and the x10 intensity conversion built for Point/Spot was applying to
+it too. Directional lights have no inverse-square falloff at all
+(parallel rays, distance-independent) and the sun already worked fine
+at its native raw value — verified live (real=2.8 alone gives a normal
+exposed outdoor scene). Gated the conversion by light type
+(`_is_falloff_light()`, Point/Spot only) before running anything,
+committed as `516e997`.
+
+**Result: 4/10 passed** (up from single-digit passes in any prior
+session's full-suite attempt, though direct comparison isn't clean —
+no earlier session has a full matching 10-case run logged).
+
+| Mood | Scene | Result | Score | Attempts |
+|---|---|---|---|---|
+| horror | Mess Hall | FAIL | 4/10 | 3 |
+| eerie_lab | Mess Hall | FAIL | 5/10 | 3 |
+| golden_hour | Forest | **PASS** | 7/10 | 1 |
+| cozy_cafe | Mess Hall | **PASS** | 6/10 | 2 |
+| thriller | Mess Hall | FAIL | 5/10 | 3 |
+| dreamlike | Forest | FAIL | 5/10 | 3 |
+| festive | Mess Hall | **PASS** | 6/10 | 3 |
+| post_apocalyptic | Mess Hall | FAIL | 4/10 | 3 |
+| zen | Forest | **PASS** | 7/10 | 2 |
+| noir | Mess Hall | FAIL | best attempt 5/10 (last attempt guardrail-rejected) | 3 |
+
+**Finding #1 — the failures aren't random, they're one pattern:**
+every single Mess Hall case that failed (horror, eerie_lab, thriller,
+post_apocalyptic, noir) used the agent's "restrained" lighting
+archetype, and every one of them drew the *same* judge critique in
+different words: lights read as isolated bright dots/props rather than
+a real key shaping the room, darkness is doing the work instead of
+deliberate light design, not enough directional shadow structure.
+Every Mess Hall case that passed (cozy_cafe, festive) used an
+"expansive"/brighter archetype; the Forest "soft_ambient" case (zen)
+also passed. This reads as the restrained archetype teaching the agent
+"low light count, near-zero ambient, modest intensity" when what dark/
+moody genres actually need is a genuinely STRONG, bright, tightly
+focused key against a dark field, not just turning everything down
+evenly. Next concrete lever to pull: push the restrained archetype's
+own instructions/reference intensities higher specifically for the key
+light, not just "fewer lights."
+
+**Finding #2 — the self-report-vs-verified mismatch tracking (built
+this session) earned its keep immediately:** caught 4 real divergences
+in this one run between what the agent claimed in `lever_accounting`
+and what the verified scene diff actually showed — thriller attempt 3
+(`MISMATCH=['rotation']`), festive attempt 2 (`MISMATCH=['intensity']`,
+two newly-created lights stayed at their `create_light()` default
+instead of the claimed intensity), noir attempt 2
+(`MISMATCH=['color', 'falloff_range', 'intensity']`) and noir attempt 3
+(`MISMATCH=['position', 'rotation']`). Worth investigating next
+session: if the agent genuinely believes it already moved/retuned a
+light when it didn't, that would also explain some of the
+`no_transform_change` guardrail rejections that show up as the FINAL,
+reported attempt for a few cases (noir specifically) even though an
+earlier attempt in the same run scored higher — the agent may think
+it's already satisfied the guardrail's requirement on a later attempt
+and stop bothering to actually move anything.
+
+**Loose end, not yet root-caused:** `tonemapping_added=True` kept
+reappearing for the Mess Hall scene across different cases in this run,
+even though the Neutral override was added and (believed) saved earlier
+this session — meaning it isn't persisting to the `.unity` file across
+scene switches/reloads. Harmless today (same default re-added each
+time, idempotent), but worth checking next session whether `save_scene()`
+is actually being called after `ensure_scene_ready()` adds it, or
+whether the Volume GameObject itself isn't surviving a scene reload for
+some other reason.
