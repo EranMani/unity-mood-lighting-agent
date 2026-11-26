@@ -1422,6 +1422,8 @@ foreach (var l in lights) {
         color_temperature = l.colorTemperature,
         bounce_intensity = l.bounceIntensity,
         shadow_type_int = (int)l.shadows,
+        shadow_strength = l.shadowStrength,
+        use_color_temperature = l.useColorTemperature,
         pos_x = l.transform.position.x, pos_y = l.transform.position.y, pos_z = l.transform.position.z,
         rot_x = l.transform.eulerAngles.x, rot_y = l.transform.eulerAngles.y, rot_z = l.transform.eulerAngles.z
     });
@@ -1666,6 +1668,16 @@ def restore_scene_baseline(scene_path: str | None = None) -> dict:
             if light.get("bounce_intensity") is not None
             else ""
         )
+        shadow_strength_restore = (
+            f'l.shadowStrength = {light["shadow_strength"]}f; '
+            if light.get("shadow_strength") is not None
+            else ""  # old baseline predates shadow_strength capture — leave untouched
+        )
+        use_color_temp_restore = (
+            f'l.useColorTemperature = {str(light["use_color_temperature"]).lower()}; '
+            if light.get("use_color_temperature") is not None
+            else ""
+        )
         light_restores.append(
             f'foreach (var l in UnityEngine.Object.FindObjectsByType<UnityEngine.Light>(UnityEngine.FindObjectsSortMode.None)) {{ '
             f'if (l.gameObject.GetEntityId().ToString() == "{light["instance_id"]}" || l.gameObject.name == "{light["name"]}") {{ '
@@ -1677,6 +1689,8 @@ def restore_scene_baseline(scene_path: str | None = None) -> dict:
             + spot_angle_restore
             + color_temp_restore
             + bounce_restore
+            + shadow_strength_restore
+            + use_color_temp_restore
             + pos_restore
             + 'break; } }'
         )

@@ -231,11 +231,22 @@ def _grading_severity(snapshot: dict) -> float:
     render. Revisit if a confirmed-crushed frame ever measures below
     3.9 in practice.
 
-    color_adjustments: contrast/50 and |saturation|/50 (both roughly
-    0-100 in this project's range) plus |post_exposure| (roughly -2..2)
-    plus average color_filter deviation from white, all additive
-    because each one is a SEPARATE multiplicative pass in the real
-    pipeline (see agent.py's RENDER PIPELINE ORDER instructions) —
+    RECALIBRATED 2026-11-26 (#2): the noir eval produced a genuinely
+    good, legible full-B&W frame (saturation=-100) that this formula
+    rejected anyway at severity=4.44, with the saturation term alone
+    contributing 2.0 of that (abs(-100)/50). Root cause: URP's
+    saturation is luma-preserving (lerps toward grayscale, doesn't
+    scale luminance), confirmed by this exact case rendering fine —
+    full desaturation isn't the same risk class as exposure/contrast/
+    vignette, which genuinely do multiply luminance down. Changed to
+    only penalize OVER-saturation (positive values, real clipping risk
+    from oversaturated channels) and ignore negative values entirely.
+
+    color_adjustments: contrast/50 and max(saturation, 0)/50 (both
+    roughly 0-100 in this project's range) plus |post_exposure|
+    (roughly -2..2) plus average color_filter deviation from white, all
+    additive because each one is a SEPARATE multiplicative pass in the
+    real pipeline (see agent.py's RENDER PIPELINE ORDER instructions) —
     stacking them is what compounds, this sum is a proxy for that."""
     ca = snapshot["color_adjustments"]
     v = snapshot["vignette"]
@@ -247,7 +258,7 @@ def _grading_severity(snapshot: dict) -> float:
     return (
         abs(ca.get("post_exposure", 0.0))
         + ca.get("contrast", 0.0) / 50
-        + abs(ca.get("saturation", 0.0)) / 50
+        + max(ca.get("saturation", 0.0), 0.0) / 50
         + v.get("intensity", 0.0) * 1.5
         + color_filter_deviation
     )
