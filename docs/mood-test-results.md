@@ -1621,3 +1621,82 @@ severity) is still open. Lights are escalating hard across attempts
 (2.8 → 4.8 → 6.2 → 12.5 → 16.5 intensity) while still getting rejected
 by one guardrail or another — worth a dedicated tuning pass next
 session rather than more ad-hoc pushes.
+
+## Session continued (2026-11-26): the REAL root cause — camera clipping plane, not lighting at all
+
+Eran was working directly in the Unity Editor (separate from the
+automated pipeline) and noticed the Scene view showed the room
+properly lit while the Game view was near-total black — and, critically,
+**disabling the Global Volume's post-processing entirely changed
+nothing**. That one fact ruled out everything the last two sessions had
+been tuning (grading, vignette, lights) as the cause of this specific
+failure mode, since none of that is reachable before the Volume stack
+even runs.
+
+Investigated two hypotheses before Eran found the real one:
+- Lights set to Baked/Mixed mode with no bake (classic Scene-view-vs-
+  Game-view mismatch) — checked directly via `component get_fields`,
+  ruled out: all lights confirmed `m_Lightmapping: Realtime`.
+- Camera's "Physical Camera" exposure (found ISO 200, f/16, 1/200s
+  shutter serialized on the Main Camera — a bright-daylight exposure
+  profile that would crush any indoor scene, and wouldn't be touched by
+  disabling post-processing) — plausible, matched the symptom, but
+  turned out to be a red herring: Physical Camera stayed checked ON in
+  Eran's own before/after screenshots and the fix wasn't there.
+
+**The actual bug, found by Eran:** the Main Camera's **near clipping
+plane was 0.01**, and the camera sits right at the room's geometry
+boundary (confirmed: camera position exactly matched the scene's
+bounding-box max corner). A near-clip that tiny means "render anything
+no matter how close to the lens" — with the camera sitting against a
+wall/ceiling, Unity was rendering that wall's unlit interior face at
+point-blank range, filling the entire frame. Raising near to ~12
+clipped that wall out of the frustum and revealed the actual room.
+This is why Scene view looked fine (its own camera preview ignores a
+Camera *component's* clip planes/exposure) and why post-processing was
+irrelevant (clipping happens at the geometry stage, before the Volume
+stack runs at all).
+
+**This is the real root cause of the "black rendering" plateau this
+entire project has been fighting across multiple sessions** — not a
+model-capability gap, not grading compounding, not a false-pass
+guardrail loophole. All of that work was real and is still correct
+(it fixed genuine secondary issues), but the dominant symptom
+(total black frames) was sitting in a camera misconfiguration that
+none of the agent's tools have ever touched or could ever touch.
+
+**Fixed and verified:**
+1. `restore_scene_baseline()` to revert any leftover mutated light
+   state from prior test runs, `save_scene()` to lock in Eran's
+   near-clip fix (confirmed in the `.unity` file: `near clip plane: 10.9`,
+   not `0.01`).
+2. Found and removed a leftover agent-created light
+   (`AgentLight_Horror_Rim_Back`) from an earlier diagnostic run that
+   hadn't been cleaned up (bypassed `main.py`'s normal
+   `cleanup_agent_lights()` since these calls went through
+   `unity_bridge` directly) — re-saved clean.
+3. **Re-captured the baseline brightness** — the old baseline was
+   measured through the broken camera. New: mean=90.8, p90=145.0 (up
+   from the old broken-camera baseline's mean=86.5, p90=112.0 — same
+   ballpark on mean since baseline itself wasn't literally black, but
+   p90 jumped meaningfully now that the camera isn't obstructed).
+4. Ran a full horror mood test end to end. **The baseline screenshot
+   alone is dramatically sharper and more detailed than any screenshot
+   this entire project has produced** — full texture/prop detail
+   clearly visible, versus the flat, muddy renders every prior session
+   worked from. The final attempt's result (rejected on an unrelated
+   guardrail technicality — no light position/rotation changed that
+   specific attempt, nothing to do with blackness) is visually a
+   genuinely convincing horror frame: one dominant light pool on the
+   arcade machine, real falloff, dark corners staying dark without
+   going unreadable, legible shapes throughout.
+
+**Open question for next session:** how much of the multi-session
+"horror/thriller keep ending in black" story, the corrupted-baseline
+finding, the grading-compounding finding, the p90-vs-baseline
+guardrail, was actually downstream of this camera bug rather than
+independent issues? Worth re-running the full eval suite now that the
+camera is fixed before doing any more guardrail/instruction tuning —
+several "failures" and "fixes" from earlier sessions may look
+completely different against a camera that isn't secretly staring
+into a wall.

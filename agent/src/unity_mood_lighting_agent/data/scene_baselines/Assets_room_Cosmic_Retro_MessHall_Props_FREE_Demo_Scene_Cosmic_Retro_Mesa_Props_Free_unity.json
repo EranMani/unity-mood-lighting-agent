@@ -1,25 +1,7 @@
 {
   "lights": [
     {
-      "instance_id": "568105584918844132",
-      "name": "Point Light (4)",
-      "mode": "Realtime",
-      "type": "Point",
-      "intensity": 2.17,
-      "color_r": 1,
-      "color_g": 1,
-      "color_b": 1,
-      "range": 4.13,
-      "shadow_type_int": 2,
-      "pos_x": 4.67929554,
-      "pos_y": 0.543907642,
-      "pos_z": -2.62548161,
-      "rot_x": 47.457016,
-      "rot_y": 220.970474,
-      "rot_z": 345.058075
-    },
-    {
-      "instance_id": "568105584918844152",
+      "instance_id": "568105584918840978",
       "name": "Point Light (3)",
       "mode": "Realtime",
       "type": "Point",
@@ -32,6 +14,24 @@
       "pos_x": 5.19629574,
       "pos_y": -0.115092278,
       "pos_z": -4.67448139,
+      "rot_x": 47.457016,
+      "rot_y": 220.970474,
+      "rot_z": 345.058075
+    },
+    {
+      "instance_id": "568105584918840958",
+      "name": "Point Light (4)",
+      "mode": "Realtime",
+      "type": "Point",
+      "intensity": 2.17,
+      "color_r": 1,
+      "color_g": 1,
+      "color_b": 1,
+      "range": 4.13,
+      "shadow_type_int": 2,
+      "pos_x": 4.67929554,
+      "pos_y": 0.543907642,
+      "pos_z": -2.62548161,
       "rot_x": 47.457016,
       "rot_y": 220.970474,
       "rot_z": 345.058075
@@ -69,7 +69,7 @@
     "intensity": 1.0
   },
   "baseline_brightness": {
-    "mean_brightness": 86.5,
-    "p90": 112.0
+    "mean_brightness": 90.8,
+    "p90": 145.0
   }
 }
