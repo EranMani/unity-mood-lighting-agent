@@ -47,7 +47,11 @@ from dotenv import load_dotenv
 
 from unity_mood_lighting_agent.agent import LightingDecision, Lever, LightRole, agent, get_scene_context
 from unity_mood_lighting_agent.judge import judge_mood_match
-from unity_mood_lighting_agent.spatial_agent import ensure_spatial_breakdown, load_cached_spatial_breakdown
+from unity_mood_lighting_agent.spatial_agent import (
+    ensure_spatial_breakdown,
+    format_spatial_breakdown_for_prompt,
+    load_cached_spatial_breakdown,
+)
 from unity_mood_lighting_agent.tools import cleanup_agent_lights
 from unity_mood_lighting_agent.unity_bridge import (
     CONTRAST_SPREAD_FLOOR,
@@ -673,6 +677,20 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                 + (f" MISMATCH={sorted(mismatch)}" if mismatch else "")
             )
 
+            # Cross-check judge_feedback_acknowledgments against the SAME
+            # verified diff (2026-11-27, Eran's call) — the forcing
+            # function only proves the agent engaged with the judge's
+            # recommendations if addressed=True claims are checked against
+            # reality, same principle as lever_accounting's MISMATCH check
+            # above, not trusted on self-report alone.
+            for ack in decision.judge_feedback_acknowledgments:
+                lever_label = ack.lever.value if ack.lever is not None else f"role->{ack.suggested_role.value if ack.suggested_role else '?'}"
+                real_lever_touched = ack.lever is not None and ack.lever.value in attempt_levers
+                flag = ""
+                if ack.addressed and ack.lever is not None and not real_lever_touched:
+                    flag = " MISMATCH (claimed addressed, lever not actually touched)"
+                print(f"  [ack] {ack.light_id or 'scene-wide'}: {lever_label} | addressed={ack.addressed} | {ack.note}{flag}")
+
             # Real conversation turn, not a flattened recap (2026-11-26,
             # Eran's call) — this attempt's actual decision goes into
             # attempt_history as an assistant turn; the feedback that
@@ -972,14 +990,58 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
             # recommended_levers is grounded in actual numbers, not a
             # guess from pixels alone. Reuses the exact json blocks
             # _serialize_decision already builds for this attempt.
+            # Also hand it the agent's OWN committed target_key_fill_ratio
+            # (2026-11-27, closing the other half of the language-gap fix:
+            # the judge couldn't previously see what ratio the agent even
+            # claimed to be aiming for, so it had no way to call out a
+            # gap between stated intent and the real numbers it's also
+            # being given below).
+            #
+            # 2026-11-27, SAME DAY, later: Eran's call — the judge STAYS
+            # stateless (fresh Runner.run, no conversation history, never
+            # sees its own prior score/reasoning — that anti-sycophancy
+            # guardrail from 2026-11-26 is untouched), but it was blind to
+            # (a) WHY the agent made this attempt's choices (only had the
+            # raw diff, not the agent's own reasoning) and (b) whether its
+            # OWN prior recommendations actually landed. Both closed here
+            # without reopening the score-memory risk: decision.reasoning
+            # (this attempt's stated intent) and
+            # decision.judge_feedback_acknowledgments (what the agent says
+            # it did about the judge's LAST recommendations, already
+            # cross-checked by main.py against the real diff above) are
+            # both per-attempt data the agent just produced, not the
+            # judge's own memory of anything.
+            ack_text = "\n".join(
+                f"- {a.light_id or 'scene-wide'}: "
+                + (f"lever={a.lever.value}" if a.lever is not None else f"role->{a.suggested_role.value if a.suggested_role else 'unspecified'}")
+                + f" | addressed={a.addressed} | {a.note}"
+                for a in decision.judge_feedback_acknowledgments
+            ) or "(none — attempt 1, or last attempt never reached you)"
+
+            spatial_breakdown = load_cached_spatial_breakdown(get_active_scene().path)
+            spatial_text = (
+                format_spatial_breakdown_for_prompt(spatial_breakdown)
+                if spatial_breakdown is not None
+                else "(none cached for this scene)"
+            )
+
             judge_scene_state = (
+                f"Agent's committed plan: archetype={decision.mood_breakdown.strategy_archetype.value}, "
+                f"target_contrast={decision.mood_breakdown.target_contrast.value}, "
+                f"target_key_fill_ratio={decision.mood_breakdown.target_key_fill_ratio:.1f} "
+                "(the key:fill intensity ratio it says it's aiming for — compare against the REAL light "
+                "state below; a big gap between this and reality is itself worth calling out)\n\n"
+                f"Agent's stated reasoning for THIS attempt (its own intent, not your verdict):\n{decision.reasoning}\n\n"
+                f"How the agent says it addressed YOUR LAST recommendations (verified against the real "
+                f"scene diff by code, not taken on faith):\n{ack_text}\n\n"
                 f"Role assignments (the agent's claim):\n{role_json}\n\n"
                 f"Real light state (ground truth, not self-report):\n{state_json}\n\n"
                 f"Global state: ambient={new_lever_snapshot['ambient']}, "
                 f"skybox={new_lever_snapshot['skybox']}, "
                 f"color_adjustments={new_lever_snapshot['color_adjustments']}, "
                 f"vignette={new_lever_snapshot['vignette']}, "
-                f"fog={new_lever_snapshot['fog']}"
+                f"fog={new_lever_snapshot['fog']}\n\n"
+                f"Spatial ground-base (geometry-only, computed once for this scene):\n{spatial_text}"
             )
             passed, judgement = await judge_mood_match(
                 task, image_path=post_attempt_capture.path, scene_state=judge_scene_state

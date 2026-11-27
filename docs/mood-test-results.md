@@ -2424,3 +2424,140 @@ across more of the failing cases to get a real read on whether the
 trim/ratio changes help, (2) chase the position/rotation self-report
 mismatch specifically — it is silently costing whole runs their last,
 best-informed attempt.
+
+## 2026-11-27 (same day, later still): closing the agent<->judge comprehension loop
+
+Eran's framing: plumbing between judge and agent (shared Lever/
+LightRole vocabulary, real scene state) is done — but nothing forces
+the agent to actually ENGAGE with what the judge told it, as opposed to
+just having the text available in `attempt_history`. Asked to verify
+the shared vocabulary is airtight, then add a structured field that
+forces explicit reasoning about whether the judge's feedback was
+understood.
+
+**Vocabulary check:** `LeverRecommendation.lever`/`suggested_role`
+(judge.py) import the EXACT same `Lever`/`LightRole` enum classes as
+`LeverUsage`/`LightRoleAssignment` (agent.py) — not duplicated string
+literals that happen to match, the literal same Python enum, no drift
+possible. Confirmed clean.
+
+One real gap found and closed: the judge's `scene_state` context
+(added last session) included real light/role/grading state, but NOT
+the agent's own committed `target_key_fill_ratio` from this session's
+earlier change — the judge had no way to compare the agent's STATED
+intent against the real numbers it was also being shown. Fixed:
+`judge_scene_state` in `main.py` now opens with the agent's committed
+archetype/contrast/target_key_fill_ratio before the real light state,
+explicitly inviting the judge to call out a gap between intent and
+reality.
+
+**Change — `JudgeFeedbackAcknowledgment` structured field.** Added to
+`LightingDecision`, placed BEFORE `reasoning` (has to inform the plan,
+not describe it after). One entry per recommendation the judge gave
+after the LAST attempt (empty list on attempt 1 or after a
+guardrail-only rejection): `lever`/`suggested_role` echoed back from
+the judge's own recommendation shape, `light_id`, `addressed: bool`,
+`note`. Same forcing-function pattern that already fixed
+`light_role_assignments`/`lever_accounting` — prose context alone
+wasn't enough, explicit structured accounting was what worked those
+two times, so applied here too. `main.py` prints `[ack]` lines and
+cross-checks `addressed=True` claims against the SAME verified lever
+diff already used for `lever_accounting`'s MISMATCH check.
+
+**Verified live, 1x on `post_apocalyptic`:**
+- The mechanism works as designed: the agent's attempt 3 acknowledged
+  all 4 of attempt 2's judge recommendations (fill intensity down, key
+  intensity down, skybox swap, harsher grading), every one correctly
+  matched to the real diff, `addressed=True` across the board.
+- **Real structural tension exposed, not a comprehension bug:** that
+  same attempt 3, having faithfully done everything the judge asked,
+  then got guardrail-rejected on `no_transform_change` anyway — none
+  of the 4 judge recommendations that attempt happened to mention
+  position/rotation, so an agent that fully engages with judge feedback
+  can still walk straight into the separate, judge-blind transform
+  guardrail with nothing left on its list to satisfy it. This is a real
+  conflict between two independent feedback sources (judge
+  recommendations vs. the deterministic per-attempt transform
+  requirement), not the agent ignoring anything.
+- Small rough edge: one acknowledgment (skybox) left both `lever` and
+  `suggested_role` unset instead of echoing `lever=skybox` back —
+  cosmetic (only affects the console label, not the MISMATCH logic,
+  which only fires on `lever`-typed entries), but a small sign the
+  vocabulary mirroring isn't perfectly tight yet.
+
+**Not yet decided:** how to resolve the judge-feedback vs. transform-
+guardrail tension found above — options include teaching the agent
+explicitly that the transform requirement applies regardless of what
+the judge asked for, treating it as an implicit standing recommendation
+every attempt, or loosening the guardrail itself now that
+`target_key_fill_ratio`/acknowledgments give the agent more to work
+with. Flagged for discussion, not resolved this session.
+
+## 2026-11-27 (same day, discussion continued): spatial grounding + reasoning/acknowledgments fed to the judge, WITHOUT reopening statelessness
+
+Discussed resolving the judge-feedback-vs-transform-guardrail tension.
+Eran's read: option 2 (give the judge spatial understanding, like the
+lighting agent already has) over option 1 (just tell the agent the
+transform rule stands regardless) — but then raised a bigger point:
+the judge gets re-derailed every call because it's stateless and has
+no idea what it told the agent last time or whether that landed, so
+its recommendations can't build on anything. Proposed giving the judge
+conversation history to fix this.
+
+**Pushed back, explicitly, before building anything:** the judge's
+statelessness is a DELIBERATE anti-sycophancy guardrail from
+2026-11-26 — a judge that remembers its own past scores gets tempted
+to score a "trying to improve" frame higher regardless of whether it
+earned it. Conversation history would reopen exactly that, since score
+and recommendation come out of the same call, you can't hand it memory
+for "better recommendations" without also handing it memory of its own
+past verdict.
+
+**Resolved, together:** keep the judge's SCORING stateless (fresh
+`Runner.run`, no history, never sees its own prior score/reasoning —
+untouched) but feed it, as plain per-attempt context (not memory):
+1. The once-per-scene spatial breakdown (`spatial_agent.py` — cached,
+   mood-blind, geometry-only anchors with suggested light positions).
+   Already built for the lighting agent; just needed piping into the
+   judge too.
+2. The agent's own `reasoning` for the CURRENT attempt (its stated
+   intent — explains non-light choices like grading/skybox that
+   `light_role_assignments` alone doesn't capture).
+3. `decision.judge_feedback_acknowledgments` for the CURRENT attempt —
+   what the judge recommended LAST round and what the agent says it
+   did about each item, already cross-checked by `main.py` against the
+   real diff. This is data the AGENT just produced this attempt, not
+   the judge's own memory of anything — the key distinction that keeps
+   this from being conversation history in disguise.
+
+**Implementation:** `main.py`'s `judge_scene_state` now includes all
+three blocks (spatial text via `format_spatial_breakdown_for_prompt`,
+`decision.reasoning`, and a formatted `ack_text` built from
+`judge_feedback_acknowledgments`). `judge.py`'s instructions updated:
+use the spatial anchors to recommend SPECIFIC coordinates when a key
+light's pool misses a real anchor, not just "reposition it"; if the
+acknowledgments show a prior recommendation was genuinely addressed
+and the problem persists anyway, recommend a DIFFERENT lever next
+time instead of repeating the same advice.
+
+**Verified live, 1x on `post_apocalyptic`:**
+- All 4 acknowledgments correctly addressed and verified against the
+  real diff (same mechanism as last section, still working).
+- **Real behavior change observed**: the judge's attempt-3
+  recommendation was POSITION/ROTATION-specific ("reposition off-axis
+  toward the back-center cluster", "aim lower and more obliquely") —
+  the old judge almost never recommended spatial moves; this is the
+  gap the spatial grounding was meant to close, and it visibly did on
+  this run. No `no_transform_change` guardrail miss this run either
+  (attempts 2 and 3 both had real position/rotation changes).
+- Still FAIL, 5/10, same critique shape ("too orderly/clean/staged,
+  not harsh/decayed enough"). One run is a mechanism check, not proof
+  of a score lift — the actual mood-quality ceiling for this case is
+  still open.
+
+**Still open, not yet decided:** does richer judge recommendations
+alone close the mood-quality gap for `post_apocalyptic` and the other
+stuck cases, or is there a deeper issue (scene content ceiling, model
+capability, something else)? Needs more runs across more cases before
+concluding anything — explicitly NOT doing that right now per Eran's
+"no more runs" call this session; next session's call.

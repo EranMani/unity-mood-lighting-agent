@@ -171,6 +171,27 @@ class LightRoleAssignment(BaseModel):
     )
 
 
+class JudgeFeedbackAcknowledgment(BaseModel):
+    """2026-11-27, Eran's call — direct fix for the suspected agent<->judge
+    language gap: the judge's recommended_levers (judge.py) already use
+    the SAME Lever/LightRole vocabulary this agent uses for itself, and
+    main.py already puts them in attempt_history as plain prose — but
+    nothing forced the agent to actually ENGAGE with each one, the same
+    'prose nudges alone don't stick' problem that light_role_assignments
+    and lever_accounting were both built to fix. One entry per
+    recommendation the JUDGE gave after your LAST attempt (not a
+    guardrail rejection, an actual judge call) — exhaustive, same
+    forcing-function pattern as LeverUsage/LightRoleAssignment. Empty
+    list is correct and expected on attempt 1, or any attempt whose
+    predecessor never reached the judge."""
+
+    lever: Lever | None = Field(default=None, description="Echo back the recommendation's lever, if it was a numeric/positional one (must match one the judge actually gave you).")
+    suggested_role: LightRole | None = Field(default=None, description="Echo back the recommendation's role swap, if it was one instead of a lever — exactly one of lever/suggested_role should be set, matching the judge's own recommendation shape.")
+    light_id: str | None = Field(default=None, description="Which light the recommendation named, if any (None for scene-wide levers like ambient/skybox/global_grading).")
+    addressed: bool = Field(description="True if you actually acted on this recommendation this attempt (verified against the real scene diff, not just your intent). False is a legitimate answer if you deliberately overrode the judge's suggestion — say why in `note`.")
+    note: str = Field(description="If addressed=True: what you actually did about it. If addressed=False: your real reason for not following it THIS attempt — 'I didn't get to it' is honest, a vague restatement of the recommendation is not.")
+
+
 class LightingDecision(BaseModel):
     """Structured final output. Field order is generation order — same
     reasoning-first technique as judge.py's MoodJudgement, extended one
@@ -179,6 +200,14 @@ class LightingDecision(BaseModel):
     and must be non-trivial — this is what main.py logs into
     attempt_history for the next retry, a bare 'Done.' is not useful
     there and shouldn't be possible with a described required field.
+
+    judge_feedback_acknowledgments (2026-11-27, Eran's call): placed
+    BEFORE reasoning — explicitly engaging with the judge's last
+    recommendations has to inform the plan, not describe it after the
+    fact. This is the forcing-function half of closing the agent<->judge
+    language gap; main.py's job is the other half (cross-checking
+    addressed=True claims against the real diff, same principle already
+    applied to lever_accounting).
 
     light_role_assignments (2026-11-26, Eran's call): placed right after
     reasoning, same forcing-function pattern as lever_accounting below,
@@ -198,6 +227,12 @@ class LightingDecision(BaseModel):
     isn't trusted alone anymore."""
 
     mood_breakdown: MoodBreakdown
+    judge_feedback_acknowledgments: list[JudgeFeedbackAcknowledgment] = Field(
+        default_factory=list,
+        description="One entry per recommendation the JUDGE gave after your last attempt (empty list if attempt 1 "
+        "or your last attempt never reached the judge). Engage with EVERY recommendation it gave you, exhaustively "
+        "— this is what proves you understood the feedback, not just read it.",
+    )
     reasoning: str = Field(description="Given the mood_breakdown, the current scene state, and any previous attempt's score/feedback, explain what you are about to change and why. Write this BEFORE making tool calls.")
     light_role_assignments: list[LightRoleAssignment] = Field(
         description="EVERY light in the scene by the end of this attempt — every light from the scene "
@@ -346,8 +381,13 @@ agent = Agent(
         "works on lights you created, never the scene's originals. Omit "
         "any parameter you don't want to change.\n\n"
         "OUTPUT: mood_breakdown first (archetype, genre, contrast, "
-        "target_key_fill_ratio, visual approach), then reasoning (your "
-        "plan, grounded in current state and any prior feedback), then "
+        "target_key_fill_ratio, visual approach), then "
+        "judge_feedback_acknowledgments (one entry per recommendation the "
+        "JUDGE gave after your LAST attempt — empty if this is attempt 1 "
+        "or your last attempt never reached the judge; this has to "
+        "actually inform the reasoning that follows, not just restate "
+        "what you were told), then reasoning (your plan, grounded in "
+        "current state and any prior feedback), then "
         "light_role_assignments, then lever_accounting (every Lever enum "
         "entry, changed or not, with a real reason — checked against real "
         "scene state, not taken on faith), then changes_summary (specific "
