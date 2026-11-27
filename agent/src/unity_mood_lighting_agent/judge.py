@@ -14,9 +14,51 @@ this module's job (judge_mood_match()), not the agent's.
 from agents import Agent, Runner
 from pydantic import BaseModel, Field
 
+from unity_mood_lighting_agent.agent import Lever, LightRole
 from unity_mood_lighting_agent.unity_bridge import capture_game_view, image_to_data_url
 
 PASS_THRESHOLD = 6  # out of 10 — plain code decides this, not the LLM
+
+
+class LeverRecommendation(BaseModel):
+    """One concrete next-step suggestion for the NEXT attempt, in the
+    exact same vocabulary the lighting agent already tracks for itself
+    (Lever enum, LightRole enum) — 2026-11-27, Eran's call, direct fix
+    for the judge/agent translation gap: the judge's prose critique
+    ('shadows too soft', 'reads as orderly') was accurate but never told
+    the agent which lever to pull, so the agent had to re-derive that
+    every attempt. Now the judge is handed the real post-attempt scene
+    state (role assignments + real light values + global grading) and
+    must name a specific lever or role swap instead of just describing
+    the pixels again.
+
+    Direction only, no target numbers (Eran's call) — the judge isn't
+    re-deriving physics, the lighting agent decides magnitude. Exactly
+    one of `lever`/`suggested_role` should be set: a recommendation is
+    either 'change this numeric/positional lever' or 'reassign this
+    light's studio role' (e.g. 'this light is better positioned to be
+    the KEY than the one currently playing it'), never both."""
+
+    light_id: str | None = Field(
+        default=None,
+        description="Which light (by instance_id, from the scene state you were given) this applies to. "
+        "None for scene-wide levers (ambient/skybox/global_grading) with no single light involved.",
+    )
+    lever: Lever | None = Field(
+        default=None,
+        description="Set this for a numeric/positional suggestion (intensity, falloff_range, position, rotation, "
+        "color, ambient, skybox, global_grading). Leave unset if this recommendation is a role swap instead.",
+    )
+    suggested_role: LightRole | None = Field(
+        default=None,
+        description="Set this INSTEAD of `lever` when the fix is reassigning which light plays which studio role "
+        "(e.g. the light currently FILL would serve better as KEY given its position/range) — not a numeric change.",
+    )
+    direction: str = Field(
+        description="Direction only, e.g. 'increase', 'decrease', 'narrow range', 'reposition closer to the subject', "
+        "'reassign to this role' — never a target number, that's the lighting agent's call."
+    )
+    reason: str = Field(description="Why this specific lever/role change addresses a real problem named in `reasoning` above.")
 
 
 class MoodJudgement(BaseModel):
@@ -34,6 +76,12 @@ class MoodJudgement(BaseModel):
     mood_match_score: int = Field(description="0-10, overall match to the requested mood.")
     dominant_color_temp: str = Field(description="warm, neutral, or cool.")
     contrast_level: str = Field(description="low, medium, or high.")
+    recommended_levers: list[LeverRecommendation] = Field(
+        default_factory=list,
+        description="If NOT passing (score < 6): 1-4 concrete next-step suggestions, grounded in the real scene "
+        "state you were given (light role assignments + real per-light values + global grading), in the lighting "
+        "agent's own lever/role vocabulary — not a restatement of `reasoning`. If passing, leave empty.",
+    )
 
 
 judge_agent = Agent(
@@ -99,7 +147,26 @@ judge_agent = Agent(
         "collapses to near-black, weak shadow separation, not cinematic), "
         "the score cannot be a 6+ pass just because the mood direction "
         "was roughly right -- a pass means you'd actually approve this "
-        "shot, not that it's merely pointed the right way."
+        "shot, not that it's merely pointed the right way. "
+        "SCENE STATE (2026-11-27, Eran's call): you will also be given "
+        "this attempt's real scene state -- every light's role assignment "
+        "(key/fill/rim/practical/unused) and its REAL intensity/range/ "
+        "color, plus global grading/ambient/skybox. Use these REAL "
+        "numbers, not guesses from pixels alone, to ground any fix you "
+        "recommend. If you fail the shot, fill `recommended_levers` with "
+        "1-4 concrete next steps in the lighting agent's own vocabulary: "
+        "either a numeric/positional lever (intensity, falloff_range, "
+        "position, rotation, color, ambient, skybox, global_grading) on a "
+        "named light, or a ROLE swap (e.g. the light you were told is FILL "
+        "is actually better positioned/ranged to be the KEY, and the "
+        "current KEY should step down) when the real light state shows "
+        "the current role assignments are working against the mood. "
+        "Direction only (increase/decrease/narrow/widen/reposition/"
+        "reassign) -- never a target number, that's the lighting agent's "
+        "job, not yours. This is a DIAGNOSIS, not a restatement of "
+        "`reasoning` -- each entry must name a specific lever or role "
+        "change that would plausibly fix a specific problem you already "
+        "described above."
     ),
     model="gpt-5.4-mini",
     output_type=MoodJudgement,
@@ -110,7 +177,9 @@ def _image_to_data_url(path: str) -> str:
     return image_to_data_url(path)
 
 
-async def judge_mood_match(mood_task: str, image_path: str | None = None) -> tuple[bool, MoodJudgement]:
+async def judge_mood_match(
+    mood_task: str, image_path: str | None = None, scene_state: str | None = None
+) -> tuple[bool, MoodJudgement]:
     """Scores image_path against mood_task. Returns (passed, judgement) —
     passed is plain code deciding from mood_match_score, not the agent's
     own opinion of pass/fail.
@@ -125,15 +194,26 @@ async def judge_mood_match(mood_task: str, image_path: str | None = None) -> tup
     so a judged "4/10, underexposed" attempt could still save a crushed-
     black result.png that nothing ever actually scored. image_path=None
     falls back to a fresh capture only for standalone/ad-hoc use outside
-    the main attempt loop."""
+    the main attempt loop.
+
+    scene_state (2026-11-27, Eran's call): the same role-assignment +
+    real-light-state text main.py already builds for the lighting agent's
+    own attempt_history — handing the judge the REAL numbers (not just
+    pixels) is what lets `recommended_levers` be grounded in actual scene
+    state instead of guessed from the image alone. None for standalone/
+    ad-hoc use where that context was never built."""
     capture_path = image_path if image_path is not None else capture_game_view().path
     image_url = _image_to_data_url(capture_path)
+
+    prompt_text = f"Requested mood: {mood_task}"
+    if scene_state is not None:
+        prompt_text += f"\n\nThis attempt's real scene state:\n{scene_state}"
 
     input_message = [
         {
             "role": "user",
             "content": [
-                {"type": "input_text", "text": f"Requested mood: {mood_task}"},
+                {"type": "input_text", "text": prompt_text},
                 {"type": "input_image", "image_url": image_url},
             ],
         }

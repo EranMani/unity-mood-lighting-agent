@@ -2229,3 +2229,105 @@ concrete next moves, in priority order:
    the whole-frame p90 ratio — `light_role_assignments` already tells
    us exactly which light/position is the KEY each attempt, so this is
    finally buildable with data already being collected.
+
+## 2026-11-27: bounds padding fix + judge/agent shared lever vocabulary
+
+Picked up priority #1 above. Eran's own hunch going in: the bounds
+check was probably rejecting valid-looking placements because it had
+no slack at the edges.
+
+**Fix 1 — bounds padding.** `check_position_within_bounds()` in
+`unity_bridge.py` already had its own docstring flagging this months
+ago: "Strict min/max, no padding margin... if this rejects too eagerly
+in practice, that's the first thing to loosen." Added
+`BOUNDS_PADDING_FRACTION = 0.10` — expands the accept/reject box by
+10% of each axis's own extent (scales with scene size, not a flat unit
+count); the rejection MESSAGE still reports the real, unpadded bounds
+so it stays an honest description of the room's actual geometry, only
+the accept/reject decision itself loosened.
+
+**Verified live, twice, on `post_apocalyptic`** (the exact case that
+tripped the no-transform-change loop): both re-runs got real
+position/rotation changes through on attempts 2 and 3 (verified from
+the scene-state diff, not self-report) — no repeat of the stuck loop.
+Score moved 4/10 → 5/10 → 4/10 (noisy, as expected for this model/
+scene), still FAIL both times, but for a genuine mood-quality reason
+now ("reads as dim/tidy, not harshly lit"), confirmed by eye against
+the actual screenshot — not the old bounds-rejection plumbing bug.
+**This fix is confirmed working and shippable; it did not, and was
+never expected to, raise the mood-quality score on its own.**
+
+**Fix 2 — judge/agent translation gap (Eran's diagnosis, verified
+first).** Before building anything, checked whether the judge's
+strictness itself was the problem (Eran: "the judge is a strict elite
+producer, I expect him to fail more, but maybe his feedback isn't
+clear enough for the agent to act on"). Loaded the actual
+`post_apocalyptic` result screenshot and compared it against the
+judge's critique by eye — critique was accurate (soft, evenly-lit,
+orderly room, no hard shadow-shaping key), not an over-harsh judge.
+Real bottleneck found instead: every deterministic PRE-judge guardrail
+in `main.py` hands the agent a highly actionable fix in its own lever
+vocabulary ("push key light intensity and/or narrow its range... check
+whether global grading is eating the gain") — but the actual LLM
+judge's feedback was dumped into `attempt_history` as raw prose
+(`judgement.reasoning`) with zero translation into levers. The judge's
+own instructions explicitly told it to describe pixels, never to name
+a fix. The agent had to re-derive "soft shadows" → "narrow range +
+raise intensity" from scratch every single attempt, a much harder
+inference than the guardrails' literal recipes.
+
+**Design, decided live with Eran:** rejected a simpler "just make the
+judge add a free-text suggestion" fix in favor of giving the judge the
+SAME structured vocabulary the agent already uses for itself (`Lever`
+enum, `LightRole` enum), plus the real post-attempt scene state (role
+assignments + real per-light intensity/range/color + global grading),
+so recommendations are grounded in actual numbers, not re-guessed from
+pixels. Direction-only (increase/decrease/reposition/reassign), no
+target numbers — Eran's explicit call: "let the lighting agent play
+with the numbers... the judge's job is to provide the direction." Also
+Eran's call: since the judge now sees `light_role_assignments` and the
+agent's own reasoning about them, it should be able to recommend a
+ROLE SWAP too (e.g. "the light you called FILL is better positioned to
+be the KEY"), not just numeric lever tweaks — a second kind of
+recommendation, not folded into the `Lever` enum itself (that enum also
+drives the agent's own per-attempt `lever_accounting` forcing-function,
+unrelated to role assignment).
+
+**Implementation:**
+- `judge.py`: new `LeverRecommendation` model (`light_id`, `lever: Lever
+  | None`, `suggested_role: LightRole | None` — exactly one of the last
+  two set, `direction`, `reason`). `MoodJudgement` gained
+  `recommended_levers: list[LeverRecommendation]`. `judge_mood_match()`
+  takes a new optional `scene_state` string, injected into the judge's
+  prompt alongside the image. Judge instructions updated to require
+  1-4 concrete lever/role suggestions grounded in that real state when
+  failing, direction only, "a DIAGNOSIS, not a restatement of
+  `reasoning`."
+- `main.py`: split `_build_role_and_state_json()` out of
+  `_serialize_decision()` so the agent's own history turn and the
+  judge's new `scene_state` context are built from the IDENTICAL JSON
+  blocks (one source of truth, not two descriptions that could drift).
+  The `JUDGE FEEDBACK` turn fed back into `attempt_history` now carries
+  both the prose critique and the structured lever list. Added a
+  console `[judge rec]` print per recommendation for visibility.
+
+**Verified live, twice, on `post_apocalyptic`:** `recommended_levers`
+populated correctly both runs, grounded in real light IDs/roles, e.g.
+*"AgentLight_Dusty_Key: rotation | reorient to rake more across the
+room instead of concentrating on the wall | The current key is
+creating a localized warm patch; a harsher side angle would carve the
+furniture and floor with stronger directional shadow shape..."* — a
+real step up from raw prose. One cosmetic miscalibration noticed: the
+judge sometimes attaches a `light_id` to a scene-wide lever
+(`ambient`) that should have `light_id=None` per its own instructions
+— harmless (just a noisier log line), not fixed this session, worth a
+small instruction tightening later if it keeps happening.
+
+**Not yet answered:** whether the new structured recommendations
+actually move the pass rate up, only ran 2 single-case verification
+passes so far (both correctly exercised the new code path, scores
+stayed FAIL at 4-5/10, noisy). Next session: let it run several more
+`post_apocalyptic` cycles (and ideally the other still-failing cases)
+to see whether grounded lever-level feedback converges faster/higher
+than the old prose-only loop did, before concluding anything about
+mood-quality impact.

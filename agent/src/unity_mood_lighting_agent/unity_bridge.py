@@ -1301,18 +1301,36 @@ class PositionBoundsCheck(BaseModel):
     bounds: SceneBounds = Field(description="The scene's current bounding box, for building a useful rejection message.")
 
 
+BOUNDS_PADDING_FRACTION = 0.10
+# 2026-11-27, Eran's call: this docstring itself flagged "no padding
+# margin... if this rejects too eagerly, that's the first thing to
+# loosen" months before it actually bit (post_apocalyptic's
+# no-transform-change loop, see docs/mood-test-results.md). Bounds are
+# computed from object PIVOT positions, not mesh surfaces, so a
+# placement a little past the measured box can still be visually
+# inside the room. Padding is a FRACTION of each axis's own extent
+# (not a flat unit count) so it scales with scene size instead of
+# being tuned per-scene.
+
+
 def check_position_within_bounds(position: tuple[float, float, float]) -> PositionBoundsCheck:
     """Pure math, no new Unity call beyond the get_scene_bounds() read —
     checks a candidate position against every axis (x/y/z — width,
     height, length) of the scene's real bounding box, not just overall
-    scale. Strict min/max, no padding margin: the bounds are computed
-    from object PIVOT positions, not actual mesh surfaces, so a
-    placement that's technically a little outside the measured box can
-    still be visually 'in the room' — if this rejects too eagerly in
-    practice, that's the first thing to loosen, not the check itself."""
+    scale. Padded by BOUNDS_PADDING_FRACTION per axis (see comment
+    above) — the returned `bounds` is still the real, unpadded box, so
+    rejection messages keep showing the scene's true geometry, only the
+    accept/reject decision itself is loosened."""
     bounds = get_scene_bounds()
     x, y, z = position
-    within = bounds.min_x <= x <= bounds.max_x and bounds.min_y <= y <= bounds.max_y and bounds.min_z <= z <= bounds.max_z
+    pad_x = (bounds.max_x - bounds.min_x) * BOUNDS_PADDING_FRACTION
+    pad_y = (bounds.max_y - bounds.min_y) * BOUNDS_PADDING_FRACTION
+    pad_z = (bounds.max_z - bounds.min_z) * BOUNDS_PADDING_FRACTION
+    within = (
+        bounds.min_x - pad_x <= x <= bounds.max_x + pad_x
+        and bounds.min_y - pad_y <= y <= bounds.max_y + pad_y
+        and bounds.min_z - pad_z <= z <= bounds.max_z + pad_z
+    )
     return PositionBoundsCheck(within=within, bounds=bounds)
 
 

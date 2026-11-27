@@ -328,6 +328,24 @@ def _describe_lever_diff(before: dict, after: dict) -> str:
     return "\n".join(lines) if lines else "    (no scene-state change detected)"
 
 
+def _build_role_and_state_json(decision: LightingDecision, real_light_state: list[dict]) -> tuple[str, str]:
+    """Shared JSON serialization for role assignments + real light state
+    (2026-11-27, split out of _serialize_decision) — used both for the
+    agent's own attempt_history assistant turn AND for the judge's
+    scene_state context, so both sides read the identical ground-truth
+    numbers rather than two independently-built descriptions drifting
+    apart over time."""
+    role_json = json.dumps(
+        [
+            {"instance_id": a.instance_id, "role": a.role.value, "reasoning": a.reasoning}
+            for a in decision.light_role_assignments
+        ],
+        indent=2,
+    )
+    state_json = json.dumps(real_light_state, indent=2)
+    return role_json, state_json
+
+
 def _serialize_decision(
     attempt: int,
     decision: LightingDecision,
@@ -335,6 +353,8 @@ def _serialize_decision(
     created_lights: set[str],
     deleted_lights: set[str],
     real_light_state: list[dict],
+    role_json: str,
+    state_json: str,
 ) -> str:
     """Build the assistant-turn text fed back as real conversation history
     (2026-11-26, Eran's call) — hybrid prose+JSON, not one giant JSON blob:
@@ -350,15 +370,10 @@ def _serialize_decision(
     claim-vs-reality gap the whole light_role_assignments field exists
     to expose. attempt_levers/created_lights/deleted_lights are the
     VERIFIED diff (_diff_levers), never decision.lever_accounting's
-    self-report — same principle already applied to the console log."""
-    role_json = json.dumps(
-        [
-            {"instance_id": a.instance_id, "role": a.role.value, "reasoning": a.reasoning}
-            for a in decision.light_role_assignments
-        ],
-        indent=2,
-    )
-    state_json = json.dumps(real_light_state, indent=2)
+    self-report — same principle already applied to the console log.
+    role_json/state_json are now built by the caller (_build_role_and_state_json)
+    so the judge can be handed the identical blocks, see main.py's judge
+    call site."""
     return (
         f"YOUR DECISION (attempt {attempt}):\n"
         f"Reasoning: {decision.reasoning}\n\n"
@@ -635,11 +650,16 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
             # attempt_history as an assistant turn; the feedback that
             # follows (guardrail or judge) becomes the paired user turn
             # below, at whichever branch this attempt falls into.
+            # Build once, store for both this attempt's assistant turn
+            # AND (if it reaches the judge) the judge's scene_state —
+            # see _build_role_and_state_json's docstring.
+            role_json, state_json = _build_role_and_state_json(decision, real_light_state)
             attempt_history.append(
                 {
                     "role": "assistant",
                     "content": _serialize_decision(
-                        attempt, decision, attempt_levers, created_lights, deleted_lights, real_light_state
+                        attempt, decision, attempt_levers, created_lights, deleted_lights,
+                        real_light_state, role_json, state_json,
                     ),
                 }
             )
@@ -918,7 +938,24 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                             )
                         continue  # skip the judge entirely, retry without burning that call
 
-            passed, judgement = await judge_mood_match(task, image_path=post_attempt_capture.path)
+            # Hand the judge the same real scene state the agent's own
+            # attempt_history gets (2026-11-27, Eran's call) — role
+            # assignments + real per-light values + global grading, so
+            # recommended_levers is grounded in actual numbers, not a
+            # guess from pixels alone. Reuses the exact json blocks
+            # _serialize_decision already builds for this attempt.
+            judge_scene_state = (
+                f"Role assignments (the agent's claim):\n{role_json}\n\n"
+                f"Real light state (ground truth, not self-report):\n{state_json}\n\n"
+                f"Global state: ambient={new_lever_snapshot['ambient']}, "
+                f"skybox={new_lever_snapshot['skybox']}, "
+                f"color_adjustments={new_lever_snapshot['color_adjustments']}, "
+                f"vignette={new_lever_snapshot['vignette']}, "
+                f"fog={new_lever_snapshot['fog']}"
+            )
+            passed, judgement = await judge_mood_match(
+                task, image_path=post_attempt_capture.path, scene_state=judge_scene_state
+            )
             scores_this_run.append(judgement.mood_match_score)
 
             print(
@@ -928,6 +965,9 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                 f"changes={decision.changes_summary} | "
                 f"judge score={judgement.mood_match_score} passed={passed}"
             )
+            for r in judgement.recommended_levers:
+                lever_label = r.lever.value if r.lever is not None else f"role->{r.suggested_role.value if r.suggested_role else '?'}"
+                print(f"  [judge rec] {r.light_id or 'scene-wide'}: {lever_label} | {r.direction} | {r.reason}")
 
             if passed:
                 _log_result(task, attempt, True, judgement, case_name, run_started_at)
@@ -938,14 +978,30 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
 
             # Real user turn (2026-11-26, Eran's call), paired with this
             # attempt's assistant turn already appended above — the judge's
-            # actual score+reasoning, not a flattened recap string.
+            # actual score+reasoning PLUS its recommended_levers
+            # (2026-11-27: direction-only lever/role suggestions grounded
+            # in the real scene state we just handed it), not a flattened
+            # recap string.
+            recommendations_text = "\n".join(
+                f"- {r.light_id or 'scene-wide'}: "
+                + (
+                    f"lever={r.lever.value}"
+                    if r.lever is not None
+                    else f"reassign role -> {r.suggested_role.value if r.suggested_role is not None else 'unspecified'}"
+                )
+                + f" | direction={r.direction} | why: {r.reason}"
+                for r in judgement.recommended_levers
+            ) or "(none given)"
             attempt_history.append(
                 {
                     "role": "user",
                     "content": [
                         {
                             "type": "input_text",
-                            "text": f"JUDGE FEEDBACK:\nScore: {judgement.mood_match_score}/10\n{judgement.reasoning}",
+                            "text": (
+                                f"JUDGE FEEDBACK:\nScore: {judgement.mood_match_score}/10\n{judgement.reasoning}\n\n"
+                                f"JUDGE'S RECOMMENDED LEVERS (direction only, you decide magnitude):\n{recommendations_text}"
+                            ),
                         }
                     ],
                 }
