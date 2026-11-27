@@ -410,6 +410,17 @@ def _log_result(
         "attempts_used": attempts_used,
         "passed": passed,
         "mood_match_score": judgement.mood_match_score,
+        # 2026-11-27, Eran's call: mood_match_score is now computed from
+        # these 4 lighting-only craft axes (judge.py's judge_mood_match),
+        # logged individually so a stuck score's cause is visible without
+        # re-reading reasoning prose — e.g. a low shadow_structure alone
+        # pinpoints the small-practicals-not-a-key failure mode directly.
+        "contrast_execution": judgement.contrast_execution,
+        "color_story_execution": judgement.color_story_execution,
+        "shadow_structure": judgement.shadow_structure,
+        "key_light_dominance": judgement.key_light_dominance,
+        # Informational only, never scored — see MoodJudgement's docstring.
+        "content_ceiling_note": judgement.content_ceiling_note,
         "dominant_color_temp": judgement.dominant_color_temp,
         "contrast_level": judgement.contrast_level,
         "notes": judgement.reasoning,
@@ -1055,6 +1066,14 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                 f"changes={decision.changes_summary} | "
                 f"judge score={judgement.mood_match_score} passed={passed}"
             )
+            print(
+                f"  [judge axes] contrast_execution={judgement.contrast_execution} "
+                f"color_story_execution={judgement.color_story_execution} "
+                f"shadow_structure={judgement.shadow_structure} "
+                f"key_light_dominance={judgement.key_light_dominance}"
+            )
+            if judgement.content_ceiling_note:
+                print(f"  [content ceiling, NOT scored] {judgement.content_ceiling_note}")
             for r in judgement.recommended_levers:
                 lever_label = r.lever.value if r.lever is not None else f"role->{r.suggested_role.value if r.suggested_role else '?'}"
                 print(f"  [judge rec] {r.light_id or 'scene-wide'}: {lever_label} | {r.direction} | {r.reason}")

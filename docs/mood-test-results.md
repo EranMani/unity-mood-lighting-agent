@@ -2561,3 +2561,99 @@ stuck cases, or is there a deeper issue (scene content ceiling, model
 capability, something else)? Needs more runs across more cases before
 concluding anything — explicitly NOT doing that right now per Eran's
 "no more runs" call this session; next session's call.
+
+## 2026-11-27 (same day, the real diagnosis): the content-ceiling leak, root-caused
+
+Eran's framing: "we're stuck at 5/10, we need to understand what the
+judge is MISSING to give better, concise, accurate critique" —
+investigated by pulling every `post_apocalyptic` judge verdict logged
+today (`mood_test_log.jsonl`) and looking at the actual result image,
+not just re-reading prose.
+
+**Root cause found, and it's not a judge-comprehension bug.** Every
+single verdict used the identical vocabulary: "staged," "tidy,"
+"showroom," "gamey," "orderly," "clean," "intact." Loaded
+`screenshots/post_apocalyptic/latest/result.png` directly: this is a
+cute, flat-shaded, low-poly "toy" art style — pastel colors (mint-green
+bench, cream walls, white vending machines), perfectly clean floor
+tiles, a glowing neon arcade sign, zero grime/wear/damage anywhere in
+the geometry. **The judge's critique was factually accurate** — no
+amount of harsh lighting makes a pastel toy-store room read as
+"ravaged," because the problem isn't lighting, it's the scene's own
+geometry and art style. This directly re-confirms a finding this
+project already made and recorded on 2026-11-23: "lighting alone cannot
+manufacture 'post-apocalyptic'... needs actual scene CONTENT (debris,
+decay) that a sci-fi mess-hall scene structurally doesn't have."
+
+**Eran's real objection, once this was named explicitly:** the judge's
+JOB is to critique lighting, full stop — this product's actual use
+case is checking lighting on an ALREADY-MODELED scene with no ability
+to change geometry, so a judge that fails the lighting agent for the
+level designer's asset choices is a broken product, not an honest
+score. Discussed two ways to fix this: (1) make the judge lighting-only
+and strip scene-modeling judgment entirely, or (2) build a NEW
+geometry-placement agent that can insert decay/debris assets. Pushed
+back hard on (2): this directly reopens the 2026-11-20 business
+decision ("v5/geometry transformation is killed, not parked, product
+scope is lighting/rendering only") — a much bigger, harder problem than
+lighting, and not something to reach for before (1) is tried.
+
+**Why the existing soft instruction ("don't deduct for missing props")
+already failed, and why a stronger instruction wouldn't fix it either:**
+the judge is a vision model scoring a single holistic
+`mood_match_score` from a single holistic visual impression — there was
+exactly one number for a content-driven vibe to attach to, no matter
+how firmly worded the "ignore content" instruction was. This needed a
+structural fix, not a better-worded rule.
+
+**Redesigned `MoodJudgement` (judge.py), real breaking change to the
+scoring model:**
+- Replaced the single free `mood_match_score` with 4 explicit
+  LIGHTING-ONLY craft axes, each answerable from lighting alone
+  regardless of scene content: `contrast_execution` (brightness
+  spread matches the mood's contrast target), `color_story_execution`
+  (palette/temperature supports the mood), `shadow_structure` (real
+  key/fill/rim falloff vs. "a few bright dots" — the axis that catches
+  the small-self-illuminating-props failure mode), `key_light_dominance`
+  (key's bright zone clears the real baseline, not just a big intensity
+  number).
+- `mood_match_score` is now COMPUTED IN CODE (`judge_mood_match()`,
+  equal-weighted average of the 4 axes, rounded) — the model's own
+  field for it is a discarded placeholder (described as "LEAVE AS 0").
+  Structurally, there is no field left for a content vibe to attach to.
+- Added `content_ceiling_note: str | None` — the ONE place
+  content/geometry observations are explicitly invited, and it is
+  NEVER read for scoring. This is where "staged/tidy/showroom" language
+  belongs from now on.
+- `judge_agent`'s instructions rewritten around the new per-axis
+  rubric, explicit "do not let X leak into the 4 numeric axes, it
+  belongs in content_ceiling_note" framing, same calibration content
+  (dim≠dramatic, practicals≠key) remapped onto the specific axis it
+  belongs to. `main.py` prints `[judge axes]` and `[content ceiling,
+  NOT scored]` lines, and logs all 4 axes + the note into
+  `mood_test_log.jsonl` for future visibility without re-reading prose.
+
+**Verified live, 1x on `post_apocalyptic` (real diagnostic win, not
+just a mechanism check):**
+- `content_ceiling_note` fired on both judge calls this run, explicitly
+  marked uninvolved in scoring: *"the room design itself is compact and
+  orderly, which limits how 'ruined' or chaotic the scene can ever
+  feel, but that is not the main issue here; the lighting still needs
+  stronger spatial shaping."*
+- Every score-driving critique this run was a genuine, actionable
+  LIGHTING complaint: "key still isn't clearing the room," "leftover
+  practical competing as a weak source," "fill too timid," "grading
+  still flattening the scene." Zero content language in anything that
+  touched a score.
+- Still FAIL, 5/10 — same NUMBER as several pre-redesign runs, but the
+  qualitative nature of the gap flipped from "unfixable, the furniture
+  is too clean" to "fixable, push the key harder and reposition the
+  leftover practical." That qualitative shift is the actual point of
+  this change, not the number itself.
+
+**Open for next session:** does the now-cleanly-separated lighting
+critique actually converge to a pass with more attempts/runs (not done
+today, one verification run only), and does this same redesign also
+unstick `eerie_lab`/`thriller`/`dreamlike` (the other cases stuck at
+5/10 since months ago) the same way, or were those stuck for a
+genuinely different reason that this fix doesn't touch.

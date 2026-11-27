@@ -62,23 +62,51 @@ class LeverRecommendation(BaseModel):
 
 
 class MoodJudgement(BaseModel):
-    """Structured score for how well a captured scene matches a mood task.
-    reasoning is deliberately FIRST — same chain-of-thought-in-output
-    technique as reasoning-then-answer: generating the description of
-    what the image actually shows before committing to a number lets
-    that description condition the score, instead of the model jumping
-    straight to a number with no deliberation. Decided live with Eran,
-    2026-11-23 — this reframes/replaces the old 'notes' field, which was
-    positioned last and explicitly 'debugging only, not branched on',
-    exactly backwards from this technique."""
+    """Structured score for how well the LIGHTING serves a requested
+    mood. reasoning is deliberately FIRST — same chain-of-thought-in-
+    output technique as reasoning-then-answer: generating the
+    description of what the image actually shows before committing to
+    numbers lets that description condition the scores.
 
-    reasoning: str = Field(description="Describe what the image actually shows FIRST, before scoring — lighting, color, contrast, what does/doesn't support the requested mood. This is what the score below should be grounded in.")
-    mood_match_score: int = Field(description="0-10, overall match to the requested mood.")
+    2026-11-27, Eran's call — major redesign, direct fix for a real,
+    repeated failure: the old single holistic `mood_match_score` kept
+    getting swamped by scene CONTENT/geometry impressions ("staged",
+    "tidy", "showroom") despite an explicit instruction not to score
+    content — a soft prose rule couldn't stop a holistic vibe-based
+    number from absorbing a holistic vibe-based impression. Fix is
+    structural, not a stronger instruction: score 4 explicit
+    LIGHTING-ONLY craft axes (contrast_execution, color_story_execution,
+    shadow_structure, key_light_dominance), each answerable from
+    lighting alone regardless of what's being lit, and compute
+    `mood_match_score` from those four in CODE (judge_mood_match()),
+    not as its own free judgment — there is structurally no field left
+    for a content vibe to attach to. `content_ceiling_note` is the
+    one place content/geometry observations are explicitly invited,
+    and it NEVER affects the score — this project's product is a
+    lighting QA tool for already-modeled scenes (Eran's call), and a
+    lighting QA tool that fails you for the level designer's asset
+    choices is a bad lighting QA tool."""
+
+    reasoning: str = Field(description="Describe what the image actually shows FIRST, before scoring any axis below — lighting, color, contrast, shadow structure. This is what every score below should be grounded in.")
+    contrast_execution: int = Field(description="0-10: does the actual brightness spread (dark zones vs bright zones) match what this mood's contrast level calls for? Judge the SPREAD itself, not whether the room 'feels' right overall.")
+    color_story_execution: int = Field(description="0-10: does the color temperature/palette actually support the mood's intended feeling (warm/cool/saturated/desaturated, as appropriate)? Judge the COLOR CHOICES, not the room's content.")
+    shadow_structure: int = Field(description="0-10: is there a real key/fill/rim structure — a visible falloff gradient, a real shadow boundary shaping the space — or does it read as 'a few small bright dots in the dark' / 'the lights were turned down'? This is the axis that catches the small-self-illuminating-props failure mode (a monitor/screen/sign glow is NOT the room being lit).")
+    key_light_dominance: int = Field(description="0-10: does the key light's bright zone genuinely clear this scene's own untouched baseline brightness (given in scene state), or does it just look locally brighter than your other lights while still being dim overall?")
+    content_ceiling_note: str | None = Field(
+        default=None,
+        description="If the scene's own geometry/art style/props structurally cap how far this mood could EVER read regardless of lighting (e.g. a bright, clean, stylized low-poly room can't look 'ravaged' no matter how harsh the light), say so here, specifically. This field is informational ONLY — it is never read for scoring, never affects any axis above or the computed mood_match_score. Leave None if content isn't the limiting factor.",
+    )
     dominant_color_temp: str = Field(description="warm, neutral, or cool.")
     contrast_level: str = Field(description="low, medium, or high.")
+    mood_match_score: int = Field(
+        default=0,
+        description="LEAVE AS 0 — this is computed by code from the four craft axes above (contrast_execution, "
+        "color_story_execution, shadow_structure, key_light_dominance), not something you decide yourself. Any "
+        "value you put here is discarded and overwritten.",
+    )
     recommended_levers: list[LeverRecommendation] = Field(
         default_factory=list,
-        description="If NOT passing (score < 6): 1-4 concrete next-step suggestions, grounded in the real scene "
+        description="If NOT passing (your craft axes average below 6): 1-4 concrete next-step suggestions, grounded in the real scene "
         "state you were given (light role assignments + real per-light values + global grading), in the lighting "
         "agent's own lever/role vocabulary — not a restatement of `reasoning`. If passing, leave empty.",
     )
@@ -96,69 +124,71 @@ judge_agent = Agent(
         "every trick a lazy lighting pass uses to fake drama -- turning "
         "everything down and calling it horror, crushing the whole frame "
         "to black and calling it noir -- and you call it out every time. "
-        "You are being asked to sign off on this shot; if you wouldn't "
-        "actually approve it for a real game, you don't pass it. "
-        "IMPORTANT SCOPE: this product controls ONLY lighting and "
-        "rendering (light placement/color/intensity, color grading, "
-        "vignette, fog, skybox) -- it NEVER adds, removes, or changes "
-        "scene geometry, props, or decorations. Score how well the "
-        "LIGHTING AND ATMOSPHERE serve the requested mood GIVEN the "
-        "existing geometry, not whether the scene literally contains "
-        "objects a real version of that mood might have (do NOT deduct "
-        "for missing decorations, furniture, debris, crowds, or props -- "
-        "those would require changing geometry, which is out of scope "
-        "and not this agent's job). If the existing geometry is "
-        "fundamentally incompatible with the mood (e.g. a sci-fi room for "
-        "'medieval castle'), say so in reasoning, but still score based on "
-        "how far lighting alone pushes the atmosphere in the right "
-        "direction, not on content it structurally cannot add. "
-        "CRITICAL CALIBRATION: do not confuse a merely DIM, evenly-lit, "
-        "flat scene for a DRAMATIC one. A cold/blue color temperature "
-        "alone is not drama -- real drama requires visible shadow shape "
-        "(parts of the frame clearly darker than others from an actual "
-        "light direction, not just a uniform dark wash), a readable "
-        "light source doing work, and enough brightness that the eye can "
-        "still tell what it's looking at. If the frame reads as 'the "
-        "lights were turned down' rather than 'this was deliberately and "
-        "dramatically lit', that is a LOW score for any mood that calls "
-        "for tension, horror, or drama (regardless of color temperature "
-        "or how 'moody' it feels on a glance) -- score the CONTRAST field "
-        "honestly too; if you'd call the actual contrast low or medium, "
-        "a high-drama mood should not be scoring 6+. "
-        "SPECIFIC FAILURE MODE TO WATCH FOR (caught live, do not repeat "
-        "this mistake): small self-illuminating props -- a monitor glow, "
-        "an arcade screen, a ceiling panel's own emissive surface -- are "
-        "NOT the same as the ROOM being lit. If the floor, walls, and "
-        "most of the geometry around those props stay near-pure black "
-        "with no real gradient or shadow falloff, that is an "
-        "underexposed/undershot scene, not 'isolated pools of light', "
-        "even if it superficially looks atmospheric at a glance. A real "
-        "key light should visibly shape the SPACE around it, not just "
-        "glow by itself while everything nearby stays black. A scene "
-        "where you could only describe 'a few small bright dots' and "
-        "nothing else is a clear FAIL (well below 6), not a borderline "
-        "pass, no matter how appropriately cold or 'ominous' the color "
-        "feels. "
-        "Write the 'reasoning' field FIRST and let it describe what you "
-        "actually see (lighting, color, contrast, what does/doesn't "
-        "support the mood ATMOSPHERICALLY) before you decide the score -- "
-        "the score MUST follow from what reasoning actually describes; if "
-        "your own reasoning lists several real problems (underexposed, "
-        "collapses to near-black, weak shadow separation, not cinematic), "
-        "the score cannot be a 6+ pass just because the mood direction "
-        "was roughly right -- a pass means you'd actually approve this "
-        "shot, not that it's merely pointed the right way. "
-        "SCENE STATE (2026-11-27, Eran's call): you will also be given "
-        "this attempt's real scene state -- every light's role assignment "
+        "You are being asked to sign off on this shot's LIGHTING; if the "
+        "lighting craft wouldn't earn your approval, you don't pass it. "
+        "SCOPE (2026-11-27, Eran's call, structural now, not just a rule): "
+        "this product controls ONLY lighting and rendering (light "
+        "placement/color/intensity, color grading, vignette, fog, "
+        "skybox) on scenes someone ELSE already modeled -- it is a "
+        "LIGHTING QA TOOL, not a scene designer, and it never adds, "
+        "removes, or changes geometry, props, or decorations. Your 4 "
+        "scored axes below (contrast_execution, color_story_execution, "
+        "shadow_structure, key_light_dominance) are EACH a question "
+        "about the LIGHT, answerable the same way regardless of what "
+        "happens to be sitting in the room -- a toy-store-bright room "
+        "and a grimy ruin can both get a 9/10 shadow_structure if the "
+        "key/fill/rim craft is equally sharp in both. Content/geometry "
+        "observations go ONLY in `content_ceiling_note`, which is never "
+        "read for scoring -- do not let 'this room still looks staged/ "
+        "clean/orderly/showroom-ish' leak into any of the 4 numeric "
+        "axes; that sentence belongs in `content_ceiling_note`, full "
+        "stop, even if it feels like the most important thing you "
+        "noticed. "
+        "CRITICAL CALIBRATION, PER AXIS: "
+        "- contrast_execution: do not confuse a merely DIM, evenly-lit, "
+        "flat scene for a high-contrast one. A cold/blue color "
+        "temperature alone is not drama -- real contrast requires a "
+        "measurable brightness SPREAD (parts of the frame clearly "
+        "darker than others from an actual light direction, not just a "
+        "uniform dark wash). If the frame reads as 'the lights were "
+        "turned down' rather than 'deliberately and dramatically lit', "
+        "score this LOW for any mood wanting tension/horror/drama, "
+        "regardless of how 'moody' it feels on a glance. "
+        "- shadow_structure (the axis that catches the single most "
+        "common failure mode seen in this project): small "
+        "self-illuminating props -- a monitor glow, an arcade screen, a "
+        "ceiling panel's own emissive surface -- are NOT the same as "
+        "the ROOM being lit. If the floor, walls, and most of the "
+        "geometry around those props stay near-pure black with no real "
+        "gradient or shadow falloff, that is underexposed/undershot "
+        "lighting craft, not 'isolated pools of light', even if it "
+        "superficially looks atmospheric. A real key light should "
+        "visibly shape the SPACE around it. 'A few small bright dots "
+        "and nothing else' is a clear LOW score here (well below 6), no "
+        "matter how appropriately cold or 'ominous' the color feels. "
+        "- key_light_dominance: a key only counts as dominant if its "
+        "bright zone clears the scene's own untouched baseline "
+        "brightness (given in scene state) by a real margin -- a big "
+        "intensity NUMBER is not sufficient if grading/vignette/fog ate "
+        "the gain back down. "
+        "Write 'reasoning' FIRST, describing what you actually see, "
+        "before scoring any axis -- each axis score MUST follow from "
+        "what reasoning actually describes; if reasoning lists real "
+        "lighting problems (underexposed, collapses to near-black, weak "
+        "shadow separation), the matching axis cannot score 6+ just "
+        "because the mood direction was roughly right. "
+        "SCENE STATE (2026-11-27): you will also be given this attempt's "
+        "real scene state -- every light's role assignment "
         "(key/fill/rim/practical/unused) and its REAL intensity/range/ "
         "color, plus global grading/ambient/skybox. Use these REAL "
-        "numbers, not guesses from pixels alone, to ground any fix you "
-        "recommend. If you fail the shot, fill `recommended_levers` with "
-        "1-4 concrete next steps in the lighting agent's own vocabulary: "
-        "either a numeric/positional lever (intensity, falloff_range, "
-        "position, rotation, color, ambient, skybox, global_grading) on a "
-        "named light, or a ROLE swap (e.g. the light you were told is FILL "
-        "is actually better positioned/ranged to be the KEY, and the "
+        "numbers, not guesses from pixels alone, to ground both your "
+        "axis scores and any fix you recommend. If your craft axes "
+        "average below 6, fill `recommended_levers` with 1-4 concrete "
+        "next steps in the lighting agent's own vocabulary: either a "
+        "numeric/positional lever (intensity, falloff_range, position, "
+        "rotation, color, ambient, skybox, global_grading) on a named "
+        "light, or a ROLE swap (e.g. the light you were told is FILL is "
+        "actually better positioned/ranged to be the KEY, and the "
         "current KEY should step down) when the real light state shows "
         "the current role assignments are working against the mood. "
         "Direction only (increase/decrease/narrow/widen/reposition/"
@@ -173,7 +203,7 @@ judge_agent = Agent(
         "last recommendations (verified against the real scene diff, not "
         "self-report), and a once-per-scene spatial breakdown (geometry "
         "anchors with suggested light positions, mood-blind). You stay "
-        "stateless every call -- no memory of your own past score or "
+        "stateless every call -- no memory of your own past scores or "
         "reasoning, score this frame on its own merits -- but use this "
         "context to make SPATIALLY GROUNDED position/rotation "
         "recommendations instead of vague ones: if a key light's pool "
@@ -236,5 +266,23 @@ async def judge_mood_match(
     ]
     result = await Runner.run(judge_agent, input_message)
     judgement: MoodJudgement = result.final_output
+
+    # 2026-11-27, Eran's call — mood_match_score is COMPUTED here, not
+    # trusted from the model's own field (see MoodJudgement's docstring
+    # for why: a free holistic number kept absorbing content/geometry
+    # impressions despite instructions not to). Equal-weighted average
+    # of the 4 lighting-only craft axes, rounded — no tuned weighting
+    # yet, observe real usage first before deciding any axis deserves
+    # more weight than another, same caution already applied elsewhere
+    # in this project (LightRole's no-cap decision, etc).
+    judgement.mood_match_score = round(
+        (
+            judgement.contrast_execution
+            + judgement.color_story_execution
+            + judgement.shadow_structure
+            + judgement.key_light_dominance
+        )
+        / 4
+    )
     passed = judgement.mood_match_score >= PASS_THRESHOLD
     return passed, judgement
