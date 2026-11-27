@@ -629,6 +629,34 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                         }
                     )
 
+            # Diagnostic only, no guardrail yet (2026-11-27) — compare the
+            # agent's own committed target_key_fill_ratio against the REAL
+            # intensity ratio of whatever it tagged KEY/FILL this attempt.
+            # Observe real usage first before deciding whether this is
+            # ever worth enforcing, same caution already applied to
+            # LightRole's no-cap-yet decision.
+            key_intensities = [
+                s["intensity"] for s in real_light_state
+                for a in decision.light_role_assignments
+                if a.instance_id == s["instance_id"] and a.role == LightRole.KEY and s["intensity"]
+            ]
+            fill_intensities = [
+                s["intensity"] for s in real_light_state
+                for a in decision.light_role_assignments
+                if a.instance_id == s["instance_id"] and a.role == LightRole.FILL and s["intensity"]
+            ]
+            if key_intensities and fill_intensities:
+                real_ratio = max(key_intensities) / max(min(fill_intensities), 1e-6)
+                print(
+                    f"  [ratio] target_key_fill_ratio={decision.mood_breakdown.target_key_fill_ratio:.1f} "
+                    f"real={real_ratio:.1f} (key={max(key_intensities):.2f}, fill={min(fill_intensities):.2f})"
+                )
+            elif key_intensities:
+                print(
+                    f"  [ratio] target_key_fill_ratio={decision.mood_breakdown.target_key_fill_ratio:.1f} "
+                    "real=n/a (no FILL light tagged this attempt)"
+                )
+
             # Deterministic lever-usage diff, same scene-reads as above —
             # independent of decision.lever_accounting's self-report.
             new_lever_snapshot = _snapshot_lever_state()

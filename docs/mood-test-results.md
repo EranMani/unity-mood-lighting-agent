@@ -2331,3 +2331,96 @@ stayed FAIL at 4-5/10, noisy). Next session: let it run several more
 to see whether grounded lever-level feedback converges faster/higher
 than the old prose-only loop did, before concluding anything about
 mood-quality impact.
+
+## 2026-11-27 (same day, later): research pass + instruction trim + key:fill ratio field
+
+Eran's framing going in: plumbing (bounds, judge/agent vocabulary) is
+done, the remaining gap is the LIGHTING AGENT's actual understanding
+of lighting quality — its instructions might be too long/conflicting,
+its structured output might be missing or have too many fields, and
+`attempt_history`/the full prompt might be bloated. Asked for web
+research on real lighting-quality/color-theory resources plus AI
+engineering technique before touching anything.
+
+**Research findings:**
+- "Instruction complexity cliff" (prompt-engineering research): frontier
+  models reliably satisfy ~3 stacked constraints and start dropping
+  rules buried mid-prompt in long system prompts. Measured our actual
+  instructions against this: `agent.py`'s system prompt was **~16,390
+  chars / ~4,097 tokens** (vs. the judge's ~5,706 chars / ~1,426 tokens)
+  — real grounds for Eran's "too long, might conflict" hypothesis, not
+  just a guess.
+- "Lighting ratio" is the real industry vocabulary for key:fill
+  relationships, not our old vague "fill ≈ 10-30% of key": standard
+  photography/cinema practice is 2:1 (flat/soft), 4:1 (moderate drama),
+  8:1+ (strong drama/noir/horror). More precise and easier for the
+  agent to reason about numerically than a percentage.
+- Color-temperature/CCT psychology research (several studies):
+  confirms cooler color temp -> higher arousal, warmer -> lower
+  arousal/calmer, illuminance correlates with pleasure/arousal. Matches
+  what the archetype section already implies intuitively — a
+  confirmatory finding, not a contradiction, nothing changed here.
+- Self-critique/predicted-score structured-output fields are a real,
+  evidence-backed technique (stepwise self-evaluation literature) but
+  cost real tokens — deliberately NOT added this session, would fight
+  the trim-instructions goal; flagged as a future experiment only if
+  the ratio field + trim alone don't move the needle.
+
+**Checked and ruled out: `attempt_history` is NOT accumulating images.**
+Verified in code: only the live `current_turn` each attempt carries a
+screenshot; `attempt_history` only ever gets the agent's serialized
+decision text and guardrail/judge feedback text, never an image turn.
+History stays bounded and text-only across retries — this was Eran's
+other suspicion going in, checked directly rather than assumed, and
+it's not the bottleneck.
+
+**Change 1 — trimmed `agent.py`'s instructions 44.5%** (16,390 -> 9,100
+chars, ~4,097 -> ~2,275 tokens). Removed ONLY project-history narration
+("Eran's call, 2026-11-25, found live that the agent reliably
+retunes..." etc) — every substantive rule survived (archetypes,
+3-point lighting roles, range-vs-diagonal sizing, render pipeline
+order with its concrete measured compounding example, existing-lights-
+not-a-constraint, the full lever menu, tools). The agent doesn't need
+to know WHY a rule exists, just the rule itself; the backstory was pure
+token cost on every single call.
+
+**Change 2 — `target_key_fill_ratio` field.** Added to `MoodBreakdown`:
+the agent now commits to an explicit key:fill INTENSITY ratio number
+(not a vague description) before setting any light intensity, using
+the real lighting-ratio convention from the research above (~2-3 soft,
+~4-6 medium-contrast, ~7-10+ horror/noir/thriller). `main.py` got a new
+diagnostic-only `[ratio]` console print comparing this claimed target
+against the REAL measured key/fill intensities (via
+`light_role_assignments` + real light state) — no guardrail yet,
+deliberately observing real usage first, same caution already applied
+to `LightRole`'s no-cap decision.
+
+**Verified live, 3x on `post_apocalyptic`:**
+- Scores: guardrail-rejected / 4->5 / guardrail-rejected. **Same 4-5/10
+  band as every pre-trim run this project has seen — no clear
+  improvement, no regression either, from 3 samples.**
+- Ratio tracking is loose but real: some attempts landed close to their
+  own stated target (5.0 target -> 5.0 real), others were far off (6.0
+  -> 16.0, 5.5 -> 3.4). The agent is reasoning about the number, just
+  not hitting it tightly yet — expected with no enforcement, not a bug.
+- **New real finding, NOT fixed this session:** 2 of the 3 runs burned
+  their FINAL attempt on the `no_transform_change` guardrail instead of
+  ever reaching the judge. One of those two is a genuine, not just
+  unlucky, bug: the agent's own `lever_accounting` claimed `position`
+  changed, but the verified scene-state diff showed
+  `MISMATCH=['position']` — a real self-report-vs-reality divergence,
+  the same class of bug flagged before for other levers but now caught
+  concretely on position/rotation specifically, on the attempt that
+  matters most (the last one, with no retry left to recover).
+
+**Honest bottom line:** the instruction trim and ratio field are both
+real, defensible, low-risk improvements (shorter prompt, clearer
+numeric target, nothing substantive lost) — but 3 runs is too small a
+sample to say whether they move the mood-quality score, and the
+self-report mismatch on the final attempt is a concrete, likely
+higher-leverage target than either of today's changes. Next session's
+two candidate priorities, not yet ranked: (1) run several more cycles
+across more of the failing cases to get a real read on whether the
+trim/ratio changes help, (2) chase the position/rotation self-report
+mismatch specifically — it is silently costing whole runs their last,
+best-informed attempt.
