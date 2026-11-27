@@ -2657,3 +2657,49 @@ today, one verification run only), and does this same redesign also
 unstick `eerie_lab`/`thriller`/`dreamlike` (the other cases stuck at
 5/10 since months ago) the same way, or were those stuck for a
 genuinely different reason that this fix doesn't touch.
+
+## 2026-11-27 (same day, the answer): full 10-case eval suite, 7/10 PASS
+
+Ran the full suite (`eval.py`, no args) to answer the open question
+above directly, instead of guessing from one case. Previous historical
+baseline across this whole project: 4/10.
+
+**Result: 7/10 PASS.** `horror`, `golden_hour`, `cozy_cafe`,
+`thriller`, `dreamlike`, `festive`, `post_apocalyptic` all passed —
+`thriller`, `dreamlike`, and `post_apocalyptic` are three of the cases
+that had been stuck at 4-5/10 for weeks/months. The content-ceiling
+fix wasn't a one-case fluke, it was systemic:
+
+- `content_ceiling_note` fired on nearly EVERY case this run, not just
+  `post_apocalyptic` — e.g. golden_hour: *"the stylized low-poly
+  foliage... caps how gritty or brooding this can read"*; cozy_cafe:
+  *"low-poly room and gamey props keep the scene... tidy... regardless
+  of lighting."* Every single one correctly quarantined from the score.
+  The content-vibe leak had been poisoning the ENTIRE suite, not one
+  scene — this scene's low-poly/stylized art style affects every mood
+  tested against it, the project just never isolated the mechanism
+  until today.
+
+**The 3 remaining failures are real and honestly diagnosed now, not
+content ceilings in disguise:**
+- `zen` (FAIL 5/10): genuine lighting gap, `shadow_structure=3-4`,
+  judge's words: *"flat... narrow brightness band, little shadow
+  separation... behaves like a gentle wash, not a clear focal anchor."*
+  Actionable — the soft_ambient archetype still needs SOME directional
+  modeling even at low contrast, it isn't getting any here.
+- `eerie_lab` and `noir`: both died on the PRE-EXISTING deterministic
+  contrast guardrail (not the judge at all) — dark zone wasn't dark
+  enough (p10=47 vs. ceiling 30, spread itself was fine). Unrelated
+  to today's redesign, an older, separate mechanism; worth a look next
+  session but not evidence against today's fix.
+
+**Honest framing, not spin:** this is the best single-run pass rate
+this project has ever recorded (previous best was a mixed/earlier-
+session 4/10, with occasional 6-9/10 on single-case cherry-picked
+reruns that were never reproduced at the full-suite level). One run
+is still one run — worth a second full-suite pass next session before
+calling 7/10 the new stable baseline, same "verify before declaring
+victory" discipline this project has used throughout. But the
+mechanism (separating lighting craft from content vibe) is now
+directly evidenced across most of the suite, not asserted from one
+case.
