@@ -2693,6 +2693,10 @@ content ceilings in disguise:**
   to today's redesign, an older, separate mechanism; worth a look next
   session but not evidence against today's fix.
 
+**CORRECTION (same day, caught before moving on):** `eerie_lab`'s FAIL
+above was a false negative, not a real result — see the next section.
+`noir`'s FAIL was real.
+
 **Honest framing, not spin:** this is the best single-run pass rate
 this project has ever recorded (previous best was a mixed/earlier-
 session 4/10, with occasional 6-9/10 on single-case cherry-picked
@@ -2703,3 +2707,65 @@ victory" discipline this project has used throughout. But the
 mechanism (separating lighting craft from content vibe) is now
 directly evidenced across most of the suite, not asserted from one
 case.
+
+## 2026-11-27 (same day, cleanup + the last 2 fixes): race-condition false negative, then 10/10
+
+**Caught a self-inflicted bug before trusting the 7/10 number.** While
+diagnosing the "3 remaining failures," noticed `eerie_lab` had TWO log
+entries one second apart (11:31:42 FAIL, 11:31:43 PASS) and two
+screenshot folders — a zombie process from an earlier double-
+backgrounded terminal call (my own mistake: combined the terminal
+tool's `background=true` with a shell `&`, so the actual job got
+orphaned when the outer wrapper returned, and I'd wrongly assumed it
+died) was still alive and raced against the properly-launched full-
+suite run, both mutating the same live Unity instance concurrently for
+the first ~5 cases. `horror`/`golden_hour`/`cozy_cafe` both passed in
+both racing runs (robust to the interference); `eerie_lab` got a
+genuine split result (one PASS, one FAIL) because the race corrupted
+one of the two measurements. `noir`/`zen`/`dreamlike`/`festive`/
+`post_apocalyptic`/`thriller` each only ran once in that window — not
+contaminated, their results stood. Re-ran `eerie_lab` alone, clean: **PASS, 6/10,
+attempt 2.** The real remaining-failures list was 2, not 3:
+`zen` and `noir`.
+
+**`noir` diagnosis:** guardrail-rejected (never reached the judge),
+`p10=47.0` against a ceiling of `30.0` — the dark zone wasn't actually
+dark, even though spread was fine (150 vs floor 3). The instructions
+told the agent to boost the key for THREAT/DRAMATIC moods but never
+stated the dark side has its own hard requirement — it was reading
+"high contrast" as "key is bright," not "shadow is genuinely near-black."
+
+**`zen` diagnosis:** reached the judge, FAIL 5/10, `shadow_structure`
+stuck at 3-4 every attempt: *"flat... gentle wash, not a clear focal
+anchor."* The SOFT_AMBIENT archetype instruction ("low contrast,
+diffuse light") was being read as "no shadow shaping needed," when the
+real ask is gentler shaping, not absent shaping — the same "flat ≠
+intended" distinction the instructions already made for dramatic moods,
+with no equivalent ever stated for the soft end.
+
+**Fix, both cheap, one sentence each, no new mechanism:** added to
+`agent.py`'s ARCHETYPES block —
+- RESTRAINED/THREAT: *"The DARK zone matters as much as the key here —
+  ambient/fill must land genuinely near-black... push ambient toward 0
+  AND check your fill/practical lights aren't quietly keeping the floor
+  above black."*
+- SOFT_AMBIENT: *"Low contrast does NOT mean no shadow shaping — a
+  real, gentle key still needs to carve a SOFT but visible falloff...
+  Flat-everywhere is a FAIL here too, same as a dramatic mood, just
+  with a gentler ratio, not an absent one."*
+
+**Verified live, targeted re-run (`eval.py noir zen`):** both PASS on
+the FIRST attempt. `noir` jumped straight to 8/10
+(`contrast_execution=8, key_light_dominance=8`, real monochrome
+key/fill/rim structure, no guardrail rejection). `zen` hit 6/10,
+`shadow_structure` moved 3-4 → 5, judge noted a real (if gentle) key
+now present instead of pure wash.
+
+**Net result of today's full session: 10/10 on the eval suite** —
+every case the project has ever tracked now passes (7 from the
+judge redesign + `eerie_lab` false-negative corrected + `noir`/`zen`
+from these two one-line tweaks). First time this has ever happened in
+this project's history. Still one data point per case though — the
+project's own discipline says verify this holds on a second clean
+full-suite run before calling 10/10 the new stable baseline, not
+declare permanent victory on one pass.
