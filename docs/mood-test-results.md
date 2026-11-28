@@ -2769,3 +2769,105 @@ this project's history. Still one data point per case though — the
 project's own discipline says verify this holds on a second clean
 full-suite run before calling 10/10 the new stable baseline, not
 declare permanent victory on one pass.
+
+## 2026-11-27/28 (new day crossed mid-session): second full-suite verify (9/10, zen flaky), then richer-scene testing — real generalization bugs found and fixed
+
+**Second clean full-suite run, as promised.** Properly backgrounded
+this time (no repeat of the earlier double-backgrounding mistake,
+verified no stray process first). Result: **9/10**, not 10/10.
+`noir` held (6/10 and 8/10 across two independent runs — that fix is
+real). `zen` flipped back to FAIL 5/10, `shadow_structure=4`, nearly
+identical critique to before the fix. Not a failed fix — `zen` sits
+right on the pass/fail boundary (axis moved 3-4 → 4-5 range from the
+fix, just not far enough to clear 6 every time), LLM non-determinism
+tips a borderline case either way run to run. Exactly the kind of
+result this project's single-trial-per-case eval scope (see eval.py's
+own docstring) warns could happen. Left as a known, accepted
+borderline flake rather than chasing more prompt tuning — see below
+for where the session went instead.
+
+**Scope pivot (Eran's call): stop chasing zen, test against richer
+scenes instead.** This whole project has debugged against exactly 2
+scenes all session (the sparse Mess Hall indoor, sparse Forest
+outdoor) — "does the agent generalize" had never actually been
+tested. Searched the Unity Asset Store for free, realistic indoor +
+outdoor packages (ruled out "Living Room" $20, Book of the Dead
+HDRP-only/incompatible with this project's URP pipeline, "Book of the
+Dead Built-In Conversion" $20 — found "Furnished Cabin" (free, PBR,
+indoor) and "Terrain Asset Pack" (free, Unity's own, outdoor) as
+candidates) — but Eran had already imported something better: **Synty
+Studios' PolygonSciFiHorror pack**, with a ready `Demo_Interior.unity`
+scene. Decided: indoor only for now, outdoor deferred.
+
+**Real bug #1 — Windows command-line length limit.** First run against
+`Demo_Interior.unity` crashed immediately: `WinError 206, "filename or
+extension is too long"`, from `restore_scene_baseline()`. This richer
+scene has far more lights than either old test scene, and every
+`unity_bridge.py` function built its C# script as a single inline
+`--code` argument on the subprocess command line — fine on sparse
+scenes, blew Windows' ~32K command-line limit on a scene with 70+
+lights. **Fixed once, not 20 times:** added `_run_unity_script()`, a
+helper that always writes the script to a temp `.cs` file and uses
+`--file` instead of `--code` (the Unity CLI's `script eval` already
+supports `--file`, no new capability needed). Mechanically replaced
+all 20 call sites in `unity_bridge.py` via a one-off regex refactor
+script (written, run, deleted), verified by import + a successful live
+re-run.
+
+**Real bug #2 — key_light_range_too_small guardrail scoped to the
+WRONG space.** First real run (7 indoor cases against
+`Demo_Interior.unity`): only 3/7 passed. `horror`/`thriller`/`noir`
+all died oscillating between two guardrails that fought each other
+(see below); `post_apocalyptic` FAIL 5/10 (genuine, separate, judge-
+reached). Root cause, found by reading `thriller`'s actual 3-attempt
+history: `RANGE_DIAGONAL_FRACTION_FLOOR` (require a KEY light's range
+≥25% of the scene's bounding-box diagonal) silently assumed "scene
+bounds ≈ the room being lit" — true on the old single-room test
+scenes, false on this sprawling multi-room Synty facility (whole-scene
+diagonal=96.6, demanding range≥24.1 for a light correctly sized
+(6.5-18) for its own one room).
+
+**Eran's framing, not a band-aid:** "do we really need the spatial
+space of the whole scene, or just the area the game camera is pointing
+at?" — scope "the room" to what the camera's frustum actually sees,
+not the building. Explicitly scoped to ONE guardrail only
+(`key_light_range_too_small`) — `check_position_within_bounds()` stays
+on whole-scene bounds, since a legitimate rim/backlight can sit just
+outside the visible frustum and still be the right placement; that
+guardrail is about "is this a sane coordinate," not "is this visible."
+
+**Built `get_camera_view_bounds()`** (`unity_bridge.py`): raycasts from
+`Camera.main` through 9 viewport points (center + 4 corners + 4 edge
+midpoints) against real colliders, builds a bounding box from the hit
+points only. Falls back to the old whole-scene `get_scene_bounds()` if
+fewer than 3 of the 9 rays hit anything (open sky, missing colliders —
+keeps the 2 old test scenes working unchanged). Verified live on
+`Demo_Interior.unity`: whole-scene diagonal=96.6 vs camera-view
+diagonal=16.4 (8/9 rays hit), required_range drops from the broken
+24.1 down to a sane 4.1.
+
+**Verified live (eval.py --scene ... horror thriller noir):** all 3
+PASS — horror 6/10, thriller 7/10, noir 6/10. Combined with the
+already-passing eerie_lab/cozy_cafe/festive: **6 of 7 indoor cases now
+pass on the richer Synty scene.** Only `post_apocalyptic` still fails
+(genuine content/lighting gap, reached the judge, unrelated to
+guardrails).
+
+**Known, NOT yet fixed — `no_transform_change` vs
+`key_light_range_too_small` still fight each other.** Found live in
+the SAME `thriller`/`noir` diagnosis: attempt 1 moves nothing →
+rejected (no_transform_change); attempt 2 moves the light AND widens
+it → still rejected (range too small, needed more attempts to get
+right); attempt 3 fixes the range but correctly doesn't re-move a light
+that's already positioned right → rejected again anyway
+(`no_transform_change` checks only the CURRENT attempt's diff, not
+whether position/rotation was ever touched across the whole case).
+`noir`'s final verification run hit this same guardrail on attempt 1
+and still recovered by attempt 2 (had enough attempts left this time) —
+this is NOT fixed, just didn't bite hard enough to fail the case this
+run. Proposed fix (not yet built, Eran's call pending): make
+`no_transform_change` cumulative across the case's attempts instead of
+per-attempt.
+
+**Also unresolved:** `post_apocalyptic` on the Synty scene (FAIL 5/10,
+genuine, separate from both guardrail bugs above).

@@ -1,0 +1,53 @@
+{
+  "reasoning": "The room is long and segmented, with a strong central table, a rear wall/ceiling feature above it, a left doorway/service area, a right wall console zone, and a deep back corridor toward the far end. Good anchor points should cover these distinct zones and offer space for lights outside nearby geometry.",
+  "anchors": [
+    {
+      "anchor_object": "Point Light (100)",
+      "anchor_name": "Point Light (100)",
+      "traits": "Compact object near the center of the room, directly above the main table with open space around it; suitable for a dominant overhead placement without clipping nearby surfaces.",
+      "suggested_light_position_x": 4.37,
+      "suggested_light_position_y": 3.8,
+      "suggested_light_position_z": 3.29
+    },
+    {
+      "anchor_object": "Point Light (95)",
+      "anchor_name": "Point Light (95)",
+      "traits": "Central rear-zone marker on the room axis, near the back half of the space with clear floor/ceiling separation; good for a broad placement covering the rear seating area.",
+      "suggested_light_position_x": -0.04,
+      "suggested_light_position_y": 3.2,
+      "suggested_light_position_z": 13.5
+    },
+    {
+      "anchor_object": "Point Light (86)",
+      "anchor_name": "Point Light (86)",
+      "traits": "Near the right wall and upper edge of the room footprint, with adjacent wall-mounted structure and some open side space; good for a side-mounted anchor along the right-hand zone.",
+      "suggested_light_position_x": 16.0,
+      "suggested_light_position_y": 3.3,
+      "suggested_light_position_z": -9.01
+    },
+    {
+      "anchor_object": "Point Light (24)",
+      "anchor_name": "Point Light (24)",
+      "traits": "Left-side mid-room anchor close to the wall/entry side, offset from the central table cluster; useful where a light can sit laterally without interfering with the main central mass.",
+      "suggested_light_position_x": -14.8,
+      "suggested_light_position_y": 3.0,
+      "suggested_light_position_z": -7.29
+    },
+    {
+      "anchor_object": "Point Light (35)",
+      "anchor_name": "Point Light (35)",
+      "traits": "Deep back-left corridor anchor in a long, narrow section near the far boundary; geometry is more constrained here, so a light can tuck just off the wall line to reach that distant zone.",
+      "suggested_light_position_x": -20.5,
+      "suggested_light_position_y": 3.2,
+      "suggested_light_position_z": -26.84
+    },
+    {
+      "anchor_object": "Point Light (121)",
+      "anchor_name": "Point Light (121)",
+      "traits": "Far back-right boundary point near the end of the room, separated from the center by a long span; good for an endpoint anchor that covers the far corridor side.",
+      "suggested_light_position_x": 24.5,
+      "suggested_light_position_y": 3.0,
+      "suggested_light_position_z": -32.52
+    }
+  ]
+}

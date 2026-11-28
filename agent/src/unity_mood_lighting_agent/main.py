@@ -67,6 +67,7 @@ from unity_mood_lighting_agent.unity_bridge import (
     get_color_adjustments,
     get_fog,
     get_light_properties,
+    get_camera_view_bounds,
     get_scene_bounds,
     get_skybox,
     get_vignette,
@@ -947,12 +948,27 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                         continue  # skip the judge entirely, retry without burning that call
 
                 # Fourth deterministic guardrail (2026-11-26): the claimed
-                # KEY light's real range vs. the scene's real diagonal —
-                # see RANGE_DIAGONAL_FRACTION_FLOOR's comment for why.
+                # KEY light's real range vs. the ROOM's real diagonal.
+                # Was: whole-scene diagonal (get_scene_bounds()) — correct
+                # on this project's original single-room test scenes, but
+                # on a big multi-room scene the whole-scene box is the
+                # entire building, not the room the camera is actually
+                # looking at, which demanded absurdly large ranges (found
+                # live 2026-11-27 testing against the Synty Demo_Interior
+                # scene: diagonal=96.6 required range>=24.1 for a light
+                # correctly sized for its own room). Scoped to just what
+                # the camera's frustum actually hits (get_camera_view_bounds,
+                # Eran's call — "use the area the game camera is pointing
+                # at, not the whole scene"); falls back to the whole-scene
+                # diagonal only if too few probe rays hit real geometry.
                 key_assignments = [a for a in decision.light_role_assignments if a.role == LightRole.KEY]
                 if key_assignments:
-                    bounds = get_scene_bounds()
-                    required_range = bounds.diagonal * RANGE_DIAGONAL_FRACTION_FLOOR
+                    view_bounds = get_camera_view_bounds()
+                    if view_bounds is not None:
+                        required_diagonal = view_bounds.diagonal
+                    else:
+                        required_diagonal = get_scene_bounds().diagonal
+                    required_range = required_diagonal * RANGE_DIAGONAL_FRACTION_FLOOR
                     undersized = [
                         (a.instance_id, real_range)
                         for a in key_assignments
@@ -960,16 +976,17 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                         and real_range < required_range
                     ]
                     if undersized:
+                        bounds_label = "room (camera view)" if view_bounds is not None else "scene (whole-scene fallback)"
                         print(
                             f"[guardrail] attempt {attempt}/{MAX_ATTEMPTS} KEY light range too small "
                             f"for the room ({undersized}, need >= {required_range:.1f} = "
-                            f"{RANGE_DIAGONAL_FRACTION_FLOOR * 100:.0f}% of diagonal {bounds.diagonal:.1f}) "
+                            f"{RANGE_DIAGONAL_FRACTION_FLOOR * 100:.0f}% of {bounds_label} diagonal {required_diagonal:.1f}) "
                             "— skipping judge call"
                         )
                         feedback = (
                             f"Your claimed KEY light(s) {[u[0] for u in undersized]} have range(s) "
-                            f"{[u[1] for u in undersized]}, but the scene's diagonal is "
-                            f"{bounds.diagonal:.1f} — a KEY light's range needs to be at least "
+                            f"{[u[1] for u in undersized]}, but the room's diagonal is "
+                            f"{required_diagonal:.1f} — a KEY light's range needs to be at least "
                             f"{required_range:.1f} ({RANGE_DIAGONAL_FRACTION_FLOOR * 100:.0f}% of the "
                             "diagonal) to actually reach a meaningful portion of the room's floor/"
                             "walls. At its current range, this light only lights its own small local "
@@ -982,7 +999,8 @@ async def run(task: str, case_name: str | None = None, scene_path: str | None = 
                         if attempt == MAX_ATTEMPTS:
                             _log_guardrail_rejection(
                                 task, attempt, "key_light_range_too_small",
-                                {"undersized": undersized, "required_range": required_range, "diagonal": bounds.diagonal},
+                                {"undersized": undersized, "required_range": required_range, "diagonal": required_diagonal,
+                                 "scope": "camera_view" if view_bounds is not None else "whole_scene_fallback"},
                                 case_name, run_started_at,
                             )
                             shutil.copyfile(post_attempt_capture.path, shot_dir / "result.png")

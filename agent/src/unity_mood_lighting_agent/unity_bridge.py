@@ -31,6 +31,27 @@ def image_to_data_url(path: str) -> str:
 UNITY_EXE = r"C:\Users\eranm\AppData\Local\Unity\bin\unity.exe"
 PROJECT_PATH = r"D:\AI\MyProjects\unity-mood-lighting-agent\MoodLightingScene"
 
+
+def _run_unity_script(script: str) -> subprocess.CompletedProcess:
+    """Run a C# script through the Unity CLI's `script eval`, always via a
+    temp .cs file (--file), never inline (--code). A long inline --code
+    argument can blow Windows' ~32K command-line length limit on scenes with
+    many objects - found via a real crash restoring a baseline against the
+    Synty Demo_Interior scene (far more lights than this project's original
+    sparse test scenes), WinError 206 'filename or extension is too long'."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".cs", delete=False, encoding="utf-8") as f:
+        f.write(script)
+        script_path = f.name
+    try:
+        return subprocess.run(
+            [UNITY_EXE, "command", "script", "eval", "--file", script_path, "--result-only", "--project-path", PROJECT_PATH],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    finally:
+        os.unlink(script_path)
+
 # GetInstanceID() is obsolete in this Unity version (hard compile error).
 # GetEntityId() replaces it, but the raw struct serializes to {} (no public
 # fields) — .ToString() is required for a usable value.
@@ -255,12 +276,7 @@ def set_object_transform(
         + " ".join(assignments) + " break; } }\n"
         "return new { ok = true };"
     )
-    subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    _run_unity_script(script)
 
 
 class CaptureResult(BaseModel):
@@ -784,12 +800,7 @@ def create_light(
         .replace("__POS_Y__", str(position[1]))
         .replace("__POS_Z__", str(position[2]))
     )
-    create_result = subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    create_result = _run_unity_script(script)
     instance_id = json.loads(create_result.stdout)["instance_id"]
 
     subprocess.run(
@@ -949,12 +960,7 @@ def compute_look_at_rotation(
         .replace("__TARGET_Y__", str(target_position[1]))
         .replace("__TARGET_Z__", str(target_position[2]))
     )
-    result = subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_unity_script(script)
     raw = json.loads(result.stdout)
     return (raw["rot_x"], raw["rot_y"], raw["rot_z"])
 
@@ -1000,12 +1006,7 @@ class ColorAdjustments(BaseModel):
 
 def get_color_adjustments() -> ColorAdjustments:
     """Read the Global Volume's current ColorAdjustments values."""
-    result = subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", _GET_COLOR_ADJUSTMENTS_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_unity_script(_GET_COLOR_ADJUSTMENTS_SCRIPT)
     return ColorAdjustments(**json.loads(result.stdout))
 
 
@@ -1040,12 +1041,7 @@ def set_color_adjustments(
         + "\n".join(assignments)
         + "\nreturn new { ok = true };"
     )
-    subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    _run_unity_script(script)
 
 
 _GET_VIGNETTE_SCRIPT = """
@@ -1068,12 +1064,7 @@ class VignetteState(BaseModel):
 def get_vignette() -> VignetteState:
     """Read the Global Volume's current Vignette state. exists=False means
     it hasn't been added to the profile yet (set_vignette adds it)."""
-    result = subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", _GET_VIGNETTE_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_unity_script(_GET_VIGNETTE_SCRIPT)
     return VignetteState(**json.loads(result.stdout))
 
 
@@ -1094,12 +1085,7 @@ vig.smoothness.overrideState = true;
 vig.smoothness.value = {smoothness}f;
 return new {{ ok = true }};
 """.strip()
-    subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    _run_unity_script(script)
 
 
 _GET_FOG_SCRIPT = """
@@ -1121,12 +1107,7 @@ class FogState(BaseModel):
 def get_fog() -> FogState:
     """Read the scene's current RenderSettings fog state (separate from
     the Volume profile — fog is a global scene render setting)."""
-    result = subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", _GET_FOG_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_unity_script(_GET_FOG_SCRIPT)
     return FogState(**json.loads(result.stdout))
 
 
@@ -1150,12 +1131,7 @@ def get_ambient() -> AmbientState:
     """Read the scene's current ambient light intensity (RenderSettings,
     not a Volume override — a simpler static property, no profile
     involved)."""
-    result = subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", _GET_AMBIENT_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_unity_script(_GET_AMBIENT_SCRIPT)
     return AmbientState(**json.loads(result.stdout))
 
 
@@ -1165,12 +1141,7 @@ def set_ambient(intensity: float) -> None:
     near-black instead of sitting on a uniform ambient floor; higher is
     fine for soft/diffuse moods where that floor is the desired look."""
     script = f"UnityEngine.RenderSettings.ambientIntensity = {intensity}f; return new {{ ok = true }};"
-    subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    _run_unity_script(script)
 
 
 class SkyboxState(BaseModel):
@@ -1191,12 +1162,7 @@ def get_skybox() -> SkyboxState:
         "UnityEditor.AssetDatabase.GetAssetPath(UnityEngine.RenderSettings.skybox) : null; "
         "return new { path = p };"
     )
-    result = subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_unity_script(script)
     return SkyboxState(**json.loads(result.stdout))
 
 
@@ -1227,12 +1193,7 @@ def set_fog(
     if not assignments:
         return
     script = "\n".join(assignments) + "\nreturn new { ok = true };"
-    subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    _run_unity_script(script)
 
 
 _GET_SCENE_BOUNDS_SCRIPT = """
@@ -1281,13 +1242,81 @@ def get_scene_bounds() -> SceneBounds:
     check_position_within_bounds() rejects placements outside of —
     planned in the original v0 tool list, never actually built until
     now."""
-    result = subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", _GET_SCENE_BOUNDS_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_unity_script(_GET_SCENE_BOUNDS_SCRIPT)
     return SceneBounds(**json.loads(result.stdout))
+
+
+_GET_CAMERA_VIEW_BOUNDS_SCRIPT = """
+var cam = UnityEngine.Camera.main;
+if (cam == null) { return new { sample_count = 0, diagonal = 0f, min_x = 0f, min_y = 0f, min_z = 0f, max_x = 0f, max_y = 0f, max_z = 0f }; }
+var viewportPoints = new UnityEngine.Vector2[] {
+  new UnityEngine.Vector2(0.5f, 0.5f),
+  new UnityEngine.Vector2(0f, 0f), new UnityEngine.Vector2(1f, 0f),
+  new UnityEngine.Vector2(0f, 1f), new UnityEngine.Vector2(1f, 1f),
+  new UnityEngine.Vector2(0.5f, 0f), new UnityEngine.Vector2(0.5f, 1f),
+  new UnityEngine.Vector2(0f, 0.5f), new UnityEngine.Vector2(1f, 0.5f),
+};
+var min = new UnityEngine.Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+var max = new UnityEngine.Vector3(float.MinValue, float.MinValue, float.MinValue);
+int hits = 0;
+float maxDist = cam.farClipPlane > 0f ? cam.farClipPlane : 500f;
+foreach (var vp in viewportPoints) {
+  var ray = cam.ViewportPointToRay(new UnityEngine.Vector3(vp.x, vp.y, 0f));
+  UnityEngine.RaycastHit hit;
+  if (UnityEngine.Physics.Raycast(ray, out hit, maxDist)) {
+    min = UnityEngine.Vector3.Min(min, hit.point);
+    max = UnityEngine.Vector3.Max(max, hit.point);
+    hits++;
+  }
+}
+if (hits == 0) {
+  return new { sample_count = 0, diagonal = 0f, min_x = 0f, min_y = 0f, min_z = 0f, max_x = 0f, max_y = 0f, max_z = 0f };
+}
+var size = max - min;
+return new {
+  sample_count = hits,
+  diagonal = size.magnitude,
+  min_x = min.x, min_y = min.y, min_z = min.z,
+  max_x = max.x, max_y = max.y, max_z = max.z
+};
+""".strip()
+
+
+class CameraViewBounds(BaseModel):
+    """The bounding box of just what the game-view camera's frustum
+    actually hits (9 rays: center + 4 corners + 4 edge midpoints,
+    against real colliders) — NOT the whole scene. Built 2026-11-27,
+    Eran's call: on a big multi-room scene, 'is this key light's range
+    big enough' should be measured against the ROOM the camera is
+    looking at, not the entire building's bounding box (which is what
+    get_scene_bounds() returns, and what RANGE_DIAGONAL_FRACTION_FLOOR
+    was silently assuming equaled 'the room' — true on this project's
+    original single-room test scenes, false on a sprawling facility).
+    sample_count is how many of the 9 rays actually hit a collider — a
+    low count (no geometry, open sky, missing colliders) means this
+    result isn't trustworthy; callers should fall back to
+    get_scene_bounds() rather than trust a near-empty sample."""
+
+    sample_count: int
+    diagonal: float
+    min_x: float
+    min_y: float
+    min_z: float
+    max_x: float
+    max_y: float
+    max_z: float
+
+
+def get_camera_view_bounds(min_samples: int = 3) -> CameraViewBounds | None:
+    """Returns None (caller should fall back to get_scene_bounds()) if
+    fewer than min_samples of the 9 probe rays hit real geometry —
+    e.g. the camera is looking mostly at open sky/empty space, or this
+    scene's colliders are missing/sparse."""
+    result = _run_unity_script(_GET_CAMERA_VIEW_BOUNDS_SCRIPT)
+    raw = json.loads(result.stdout)
+    if raw["sample_count"] < min_samples:
+        return None
+    return CameraViewBounds(**raw)
 
 
 class PositionBoundsCheck(BaseModel):
@@ -1436,12 +1465,7 @@ UnityEditor.AssetDatabase.SaveAssets();
 return new {{ ok = true, material_path = matPath }};
 """.strip()
 
-    result = subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_unity_script(script)
     data = json.loads(result.stdout)
     if not data.get("ok"):
         return f"Error: {data.get('error', 'unknown failure setting skybox')}"
@@ -1473,12 +1497,7 @@ class ActiveScene(BaseModel):
 def get_active_scene() -> ActiveScene:
     """Read which scene is CURRENTLY open in the Editor. Deterministic,
     no ambiguity — just a live read, same as list_scene_transforms()."""
-    result = subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", _GET_ACTIVE_SCENE_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_unity_script(_GET_ACTIVE_SCENE_SCRIPT)
     return ActiveScene(**json.loads(result.stdout))
 
 
@@ -1489,12 +1508,7 @@ def open_scene(scene_path: str) -> None:
     cleanup/agent work, only when get_active_scene() doesn't already
     match — never silently assumed."""
     script = f'UnityEditor.SceneManagement.EditorSceneManager.OpenScene("{scene_path}"); return new {{ ok = true }};'
-    subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    _run_unity_script(script)
 
 
 # --- Scene readiness / baseline (v6, see README) -------------------------
@@ -1579,12 +1593,7 @@ def capture_scene_baseline(scene_path: str | None = None) -> dict:
     if os.path.exists(path):
         return {"status": "already_captured", "path": path}
 
-    result = subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", _CAPTURE_BASELINE_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_unity_script(_CAPTURE_BASELINE_SCRIPT)
     data = json.loads(result.stdout)
     data["scene_path"] = scene_path
     color = get_color_adjustments()
@@ -1700,12 +1709,7 @@ def ensure_scene_ready(scene_path: str | None = None) -> dict:
     cleanup_agent_lights()/reset_post_processing(), called once at the
     top of main.py's run(), no LLM judgment involved."""
     baseline = capture_scene_baseline(scene_path)
-    result = subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", _ENSURE_READY_SCRIPT, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_unity_script(_ENSURE_READY_SCRIPT)
     report = json.loads(result.stdout)
     report["baseline"] = baseline
     return report
@@ -1817,12 +1821,7 @@ def restore_scene_baseline(scene_path: str | None = None) -> dict:
         )
 
     full_script = "\n".join(light_restores + probe_restores + [skybox_restore, "return new { ok = true };"])
-    subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", full_script, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    _run_unity_script(full_script)
 
     ca = baseline["color_adjustments"]
     set_color_adjustments(
@@ -1872,10 +1871,5 @@ def save_scene(scene_path: str | None = None) -> dict:
         "bool ok = UnityEditor.SceneManagement.EditorSceneManager.SaveScene(s); "
         "return new { ok = ok, path = s.path };"
     )
-    result = subprocess.run(
-        [UNITY_EXE, "command", "script", "eval", script, "--result-only", "--project-path", PROJECT_PATH],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    result = _run_unity_script(script)
     return json.loads(result.stdout)
